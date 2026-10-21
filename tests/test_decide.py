@@ -371,10 +371,10 @@ def test_the_golden_hashes_hold_under_every_hash_seed(seed: str) -> None:
     result = subprocess.run(
         [sys.executable, "-c", _GOLDEN_PROBE],
         capture_output=True,
-        text=True,
+        encoding="utf-8",
         check=True,
         cwd=Path(__file__).parent,
-        env={**os.environ, "PYTHONHASHSEED": seed},
+        env={**os.environ, "PYTHONHASHSEED": seed, "PYTHONIOENCODING": "utf-8"},
     )
     assert result.stdout.splitlines() == [
         f"{GOLDEN_DESIGN} {GOLDEN_RECORD} {GOLDEN_BROKEN}",

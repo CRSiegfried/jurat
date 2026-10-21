@@ -127,11 +127,11 @@ _SEED_PROBE = (
 def test_the_sets_are_alike_under_every_hash_seed() -> None:
     outputs: set[str] = set()
     for seed in ("0", "1", "4242"):
-        env = {**os.environ, "PYTHONHASHSEED": seed}
+        env = {**os.environ, "PYTHONHASHSEED": seed, "PYTHONIOENCODING": "utf-8"}
         result = subprocess.run(
             [sys.executable, "-c", _SEED_PROBE],
             capture_output=True,
-            text=True,
+            encoding="utf-8",
             check=True,
             cwd=TESTS,
             env=env,
