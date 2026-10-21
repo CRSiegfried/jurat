@@ -1,0 +1,25 @@
+name: Bug report
+description: Something jurat does differs from what its docs or spec say.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest design, bindings and input state that show it.
+      render: python
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: jurat and Python versions
+      placeholder: jurat 0.1.0, Python 3.13.2
+    validations:
+      required: true

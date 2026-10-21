@@ -1,0 +1,22 @@
+name: Proposal
+description: Propose a change or feature. Agree on it here before opening a pull request.
+labels: [proposal]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: change
+    attributes:
+      label: What would change?
+      description: The API or behavior you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: guarantees
+    attributes:
+      label: Effect on the spec's guarantees
+      description: Does this touch the markers for unknowns, declared reads, the guard, the record and its replay, or redaction? If so, how?
