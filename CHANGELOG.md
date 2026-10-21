@@ -4,6 +4,8 @@ All notable changes to jurat are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-21
+
 ### Changed
 
 - `Source.batch` is now `Source.oracle`, the name of the binding that answers the source, and the design document's `batch` member is `oracle`. Every design hash changes, so a record written under 0.0.1 names a design hash that no reloaded design has. `EntryRefusal` messages name the oracle, and a missing `default` binding says it serves the sources with no oracle.
@@ -31,5 +33,6 @@ All notable changes to jurat are recorded here. The format follows [Keep a Chang
 - `load` refuses decision tables, policy tables, data rules, plan declarations, candidate sets, candidate-valued label sets and grounded declarations.
 - No state carries from one turn to the next.
 
-[Unreleased]: https://github.com/CRSiegfried/jurat/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/CRSiegfried/jurat/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/CRSiegfried/jurat/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/CRSiegfried/jurat/releases/tag/v0.0.1
