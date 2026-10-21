@@ -7,7 +7,7 @@ with no ``verdict`` item is ``unfinished``, and one with a ``verdict`` item and 
 is ``nothing-to-replay``: either returns ``None`` with that finding alone. Otherwise the record's
 run settings go through decide's bounds check, and decide's body runs through its internal
 entry: the recorded state entry typed by the given design in place of the codec, the fixture
-binding under every declared batch key and ``default``, the observer, and the record's cut in
+binding under every declared oracle name and ``default``, the observer, and the record's cut in
 place of a clock reading. A cancellation or the observer's exception
 propagates as decide lets it out, with the replay record so far and no findings.
 
@@ -83,7 +83,7 @@ async def replay(
     )
     calls = RecordedCalls(log)
     fixture = FixtureBinding(calls, loaded)
-    keys = {s.batch for s in loaded._design.sources.values() if s.batch is not None}
+    keys = {s.oracle for s in loaded._design.sources.values() if s.oracle is not None}
     bindings = _bound(loaded, dict.fromkeys({*keys, _DEFAULT}, fixture))
     value = decoded(state[0]["value"], loaded._types[_STATE])
     decision = await _turn(

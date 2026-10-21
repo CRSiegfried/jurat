@@ -262,31 +262,35 @@ def _copied(bindings: object) -> dict[object, object]:
 
 
 def _bound(loaded: LoadedDesign, copied: dict[object, object]) -> dict[str, OracleBinding]:
-    """The bindings by batch key: one for every batch key a source declares and for
-    ``default`` when a source declares none, and none for a key the design does not declare."""
+    """The bindings by oracle name: one for every oracle a source names and for ``default``
+    when a source names none, and none for a key the design does not declare."""
     named: dict[str, OracleBinding] = {}
     for key, binding in copied.items():
         if not issubclass(type(key), str):
             raise EntryRefusal(
-                f"the bindings key {described(key)} is not a batch key the design declares"
+                f"the bindings key {described(key)} is not an oracle name the design declares"
             )
         name = string_data(cast(str, key))
         if name in named:
-            raise EntryRefusal(f"two bindings keys name the batch key {quote(name)}")
+            raise EntryRefusal(f"two bindings keys name {quote(name)}")
         named[name] = cast(OracleBinding, binding)
     sources = loaded._design.sources.values()
-    declared = {s.batch for s in sources if s.batch is not None}
+    declared = {s.oracle for s in sources if s.oracle is not None}
     for name in code_point_sorted(named):
         if name != _DEFAULT and name not in declared:
             raise EntryRefusal(
-                f"the bindings key {quote(name)} is not a batch key the design declares"
+                f"the bindings key {quote(name)} is not an oracle name the design declares"
             )
     needed = set(declared)
-    if any(s.batch is None for s in sources):
+    if any(s.oracle is None for s in sources):
         needed.add(_DEFAULT)
     for name in code_point_sorted(needed):
         if name not in named:
-            raise EntryRefusal(f"no binding is given for the batch key {quote(name)}")
+            if name == _DEFAULT:
+                raise EntryRefusal(
+                    f"no binding is given under {quote(name)} for the sources with no oracle"
+                )
+            raise EntryRefusal(f"no binding is given for the oracle {quote(name)}")
     return named
 
 

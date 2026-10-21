@@ -69,7 +69,7 @@ def intent_source(**changes: Any) -> Source:
             "q:intent/tone": Question("choice", Text("Which tone?"), labels=("warm", "cold")),
         },
         "needs": ["t:state.sender", "t:state"],
-        "batch": "mail",
+        "oracle": "mail",
         "timeout": 30,
         "payload": {"model": "m", "tags": ("a", "b"), "mood": Mood.calm},
         "cost": 2,

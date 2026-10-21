@@ -48,14 +48,18 @@ def design(
     parameters: dict[str, Parameter] | None = None,
     state: str = t.record(),
 ) -> LoadedDesign:
-    """A source providing ``provides``, one rule over every read with ``boundaries``."""
+    """Sources providing ``provides``, one per level, and one rule over every read with
+    ``boundaries``."""
     reads = sorted(set(provides) | set(boundaries or {}))
+    asked = {k: v for k, v in provides.items() if k.startswith("q:")}
+    looked = {k: v for k, v in provides.items() if not k.startswith("q:")}
+    sources = {"ask": Source(asked), "look": Source(looked)}
     rule = Rule("d:echo", t.boolean, echo, version="1", reads=reads, boundaries=boundaries)
     return load(
         Design(
             state=state,
             policy=Policy(plan, version="p"),
-            sources={"ask": Source(provides)},
+            sources={k: v for k, v in sources.items() if v.provides},
             rules={"echo": rule},
             parameters=parameters or {},
         )

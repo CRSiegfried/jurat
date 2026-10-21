@@ -4,7 +4,7 @@ question's answer changing the plan or the verdict.
 
 It fills the exogenous values, every ref a source provides and ``t:state``, by the lint points,
 and runs ``decide_sync`` once per point with the default run settings, no codec, the point's
-``t:state`` as the state and one binding, under ``default`` and every declared batch key,
+``t:state`` as the state and one binding, under ``default`` and every declared oracle name,
 that answers each asked ref from the point. So the ``d:`` values, ``Unasked`` and ``Unsure``
 come from the rules and the ``when``s, which decide runs. Two runs differ when their ``plan``
 or ``verdict`` items' canonical bytes differ, as replay compares them. Each point
@@ -38,7 +38,7 @@ def dead_questions(
     sources = loaded._design.sources.values()
     reads = code_point_sorted({ref for s in sources for ref in s.provides} | {_STATE})
     fills, on_grid = filled(loaded, reads, values)
-    keys = {s.batch for s in sources if s.batch is not None}
+    keys = {s.oracle for s in sources if s.oracle is not None}
     lists = [fills[r] for r in reads]
     sizes = [len(points) for points in lists]
     runs: list[tuple[bytes, bytes]] = []

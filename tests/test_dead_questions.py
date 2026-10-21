@@ -186,7 +186,7 @@ def test_the_points_count_every_run_in_grid_order() -> None:
 
 def test_the_binding_answers_under_default_and_every_declared_batch_key() -> None:
     sources = {
-        "ask": Source({"q:go": QUESTIONS["q:go"]}, batch="model"),
+        "ask": Source({"q:go": QUESTIONS["q:go"]}, oracle="model"),
         "look": Source({"t:n": t.integer()}),
     }
     loaded = load(design(sources=sources))

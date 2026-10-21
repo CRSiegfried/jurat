@@ -112,10 +112,14 @@ STATE_T = t.record(
     sender=t.record(address=t.string),
 )
 ASK = Source(
-    {"q:spam": Question("noul", Text("Is it spam?")), "t:body": t.string},
+    {"q:spam": Question("noul", Text("Is it spam?"))},
     needs=["t:state.subject"],
+    oracle="mail",
     cost=1,
 )
+BODY = Source({"t:body": t.string}, needs=["t:state.subject"], oracle="mail")
+"""Asked with ``ask`` in one call: the two share the oracle ``mail``, and ``ask`` is the
+batch's first source, so its scripted reply answers both."""
 LOOK = Source({"t:size": t.integer()}, needs=["t:state"])
 RULES = {
     "route": Rule("d:route", t.label("no", "yes"), route, version="1", reads=["q:spam"]),
@@ -126,7 +130,7 @@ RULES = {
 def slice_design(**changes: Any) -> LoadedDesign:
     fields: dict[str, Any] = {
         "state": STATE_T,
-        "sources": {"ask": ASK, "look": LOOK},
+        "sources": {"ask": ASK, "body": BODY, "look": LOOK},
         "rules": RULES,
         "policy": Policy(archive_policy, version="1", reads=["d:route"]),
         "tools": ["archive"],
@@ -146,20 +150,20 @@ STATE: dict[str, Any] = {
 SPAM = {"q:spam": {"yes": 0.9, "no": 0.1}, "t:body": "text of the mail"}
 REPLIES: dict[str, object] = {"ask": returns(SPAM), "look": returns({"t:size": 4})}
 
-GOLDEN_DESIGN = "sha256:558100dabed470931fd6de70bb34a8912e75e6bb352ec7aa6999b709c5f508e5"
-GOLDEN_RECORD = "sha256:1e2e1a36db84dcb8822375c6de871ad52a1ab7dec039ad6ee6aaf949d54e28bd"
-GOLDEN_BROKEN = "sha256:f3c9e51fa57401f0d26b4f13e826030bdd462c7d72f6d56b8ad0848e2107ab44"
+GOLDEN_DESIGN = "sha256:c2760531ea781e26dac6f13edfbfa8e65fe9cd31c6b921580d5dd099dd345791"
+GOLDEN_RECORD = "sha256:801b6def62ecff453cb884b8b71aca68590c3b1639d27ca4b0d3f4f63893fbe2"
+GOLDEN_BROKEN = "sha256:028d41d14c702418a4423170288ff93b5ec90c7a2a536237c65b84c541c63a1b"
 GOLDEN_CANCELLED = (
-    "sha256:2105990ef18915c5655dd1a4cef563815fd5a3e4e1e68a707ce2e618c970c23a",
-    "sha256:32681979bc8ee418cced4b8f01ec5cc25c598f901a472de5eef112c2bcd2afcd",
+    "sha256:c75d081e65894a39f0a23de031872e940443ae271b61c576241cb674f3f2eaed",
+    "sha256:b852f958ca2ea12925de815eb234d97397b6baa9479d02b34ea3b02c37b36776",
 )
 GOLDEN_REFUSED = (
-    "sha256:d7d68420562bdc9fcaffb8539e7ca978b3c2f841760713e95355f8f91a8dddfe",
-    "sha256:1755b2cef16dc58b4556f3233d1d1f53da392be8e06f98c7f11a48de5eb394ed",
+    "sha256:66afb9014edaba4c752fb1abf474400f20c9c3d002e41728fb74e85e0d6017d9",
+    "sha256:9bfaf46a053f4c08cdb939f7c848e3aec8df04cc5d08e035b804b75d3469237d",
 )
 GOLDEN_ESCALATE = (
-    "sha256:bb7ef7e222dc08358034aa8b58bf50589dcb6690cf6462b66799d76a67dc102f",
-    "sha256:96adb56a94308b54ce699eeceafa74e6b65bfe9bb2b720944bb70dc67967d16b",
+    "sha256:0c79f766c67363d4fcb1e7d02377c5cae975def3ba8ad8c7e3abce9d586273fc",
+    "sha256:4de09f9fa2af8f8c2499641f99d97e34ee1c4f5cb69bac213944f0264052b60a",
 )
 """Each a pair: the design hash, then the record hash."""
 
@@ -168,8 +172,13 @@ def scripted(**changes: object) -> Scripted:
     return Scripted({**REPLIES, **changes})
 
 
+def bound(binding: object) -> dict[str, Any]:
+    """One binding under every key the slice design needs: ``default`` and ``mail``."""
+    return {"default": binding, "mail": binding}
+
+
 def bindings(**changes: object) -> dict[str, Any]:
-    return {"default": scripted(**changes)}
+    return bound(scripted(**changes))
 
 
 def go(
@@ -551,8 +560,8 @@ REFUSED: list[tuple[str, dict[str, Any]]] = [
     ("a mapping whose copy raises", {"binds": Weird()}),
     ("a raising __class__", {"binds": Classless()}),
     ("no default binding", {"binds": {}}),
-    ("an undeclared batch key", {"binds": {"default": scripted(), "mail": scripted()}}),
-    ("a key that is not a string", {"binds": {"default": scripted(), 1: scripted()}}),
+    ("an undeclared oracle name", {"binds": {**bindings(), "post": scripted()}}),
+    ("a key that is not a string", {"binds": {**bindings(), 1: scripted()}}),
     ("two keys of one string data", {"binds": {"default": scripted(), Odd("default"): 1}}),
     ("a non-null certificate cap", {"settings": RunSettings(certificate_cap=1)}),
     ("a codec that is an int", {"codec": 5}),
@@ -657,12 +666,15 @@ def test_a_design_with_no_source_needs_no_binding_and_takes_default() -> None:
     assert go(loaded, {}, {"default": object()}).record.log[2]["ref"] == "t:state"
 
 
-def test_a_batch_key_needs_its_binding_and_default_only_for_a_keyless_source() -> None:
-    keyed = slice_design(sources={"ask": ASK, "look": Source({"t:size": t.integer()}, batch="m")})
-    with pytest.raises(EntryRefusal, match='"m"'):
-        go(keyed, binds={"default": scripted()})
+def test_an_oracle_needs_its_binding_and_default_only_for_a_source_with_none() -> None:
+    keyed = slice_design(
+        sources={"ask": ASK, "body": BODY, "look": Source({"t:size": t.integer()}, oracle="m")}
+    )
+    with pytest.raises(EntryRefusal) as caught_refusal:
+        go(keyed, binds={"default": scripted(), "mail": scripted()})
+    assert str(caught_refusal.value) == 'no binding is given for the oracle "m"'
     only = slice_design(
-        sources={"look": Source({"t:size": t.integer()}, batch="m")},
+        sources={"look": Source({"t:size": t.integer()}, oracle="m")},
         rules={},
         policy=Policy(archive_policy, version="1"),
     )
@@ -677,13 +689,38 @@ def test_a_str_subclass_key_is_its_string_data() -> None:
     class Key(str):
         pass
 
-    decision = go(binds={Key("default"): scripted()})
+    binding = scripted()
+    decision = go(binds={Key("default"): binding, Key("mail"): binding})
     assert decision.verdict.kind is VerdictKind.passed
 
 
 def test_two_keys_of_one_string_data_are_refused() -> None:
-    with pytest.raises(EntryRefusal, match="two bindings keys"):
+    with pytest.raises(EntryRefusal) as refused:
         go(binds={"default": scripted(), Odd("default"): scripted()})
+    assert str(refused.value) == 'two bindings keys name "default"'
+
+
+@pytest.mark.parametrize(
+    ("binds", "message"),
+    [
+        ({"mail": None}, 'no binding is given under "default" for the sources with no oracle'),
+        ({"default": None}, 'no binding is given for the oracle "mail"'),
+        (
+            {"default": None, "mail": None, "post": None},
+            'the bindings key "post" is not an oracle name the design declares',
+        ),
+        (
+            {"default": None, "mail": None, 1: None},
+            "the bindings key 1 is not an oracle name the design declares",
+        ),
+    ],
+)
+def test_each_binding_refusal_names_the_oracle_or_default(
+    binds: dict[object, object], message: str
+) -> None:
+    with pytest.raises(EntryRefusal) as refused:
+        go(binds=cast("dict[str, Any]", binds))
+    assert str(refused.value) == message
 
 
 def test_the_bindings_are_copied_once_and_only_the_copy_is_read() -> None:
@@ -725,7 +762,7 @@ def test_the_state_entry_drops_undeclared_fields_at_every_depth() -> None:
 def test_bytes_are_base64url_in_the_record_and_bytes_and_floats_live() -> None:
     seen = Seen()
     binding = scripted()
-    record = go(binds={"default": binding}, observer=seen).record
+    record = go(binds=bound(binding), observer=seen).record
     assert state_value(record)["blob"] == "AAE"
     (look,) = [b[0] for b in binding.batches if b[0].id == "look"]
     live = cast("dict[str, Any]", look.needs["t:state"])
@@ -986,7 +1023,7 @@ def test_a_raising_codec_is_a_broken_entry_with_its_text_under_the_plan_index() 
         return archive_policy(r)
 
     loaded = slice_design(policy=Policy(counted, version="1", reads=["d:route"]))
-    decision = go(loaded, codec=codec, binds={"default": binding})
+    decision = go(loaded, codec=codec, binds=bound(binding))
     record = decision.record
     assert record.log[2:] == [
         BROKEN_ITEM,
@@ -1376,7 +1413,9 @@ def test_a_when_raising_a_cancellation_in_round_2_keeps_round_1_whole() -> None:
         raise asyncio.CancelledError
 
     later = Source({"t:later": t.string}, needs=["d:route"], when=When(cancels, version="1"))
-    exc = caught(deciding(slice_design(sources={"ask": ASK, "look": LOOK, "later": later})))
+    exc = caught(
+        deciding(slice_design(sources={"ask": ASK, "body": BODY, "look": LOOK, "later": later}))
+    )
     assert type(exc) is asyncio.CancelledError
     record = record_of(exc)
     assert record.log[-1] == CAUSE_ITEM
@@ -1407,7 +1446,7 @@ def rounds(record: Record) -> list[dict[str, Any]]:
 
 def test_the_codecs_time_counts_against_the_deadline() -> None:
     binding = scripted()
-    record = go(binds={"default": binding}, settings=RunSettings(deadline=0.01), codec=Slow(0.05))
+    record = go(binds=bound(binding), settings=RunSettings(deadline=0.01), codec=Slow(0.05))
     assert binding.batches == []
     assert rounds(record.record) == [{"item": "round", "round": 1, "cost": 0, "deadline": True}]
     log = record.record.log
@@ -1423,7 +1462,7 @@ def test_the_codecs_time_counts_against_the_deadline() -> None:
 
 def test_a_budget_within_its_bounds_runs_and_cuts_the_frontier_over_it() -> None:
     binding = scripted()
-    record = go(binds={"default": binding}, settings=RunSettings(budget=0.5)).record
+    record = go(binds=bound(binding), settings=RunSettings(budget=0.5)).record
     assert binding.batches == []
     assert rounds(record) == [{"item": "round", "round": 1, "cost": 0, "deadline": False}]
     assert record.log[1]["settings"]["budget"] == 0.5
@@ -1442,7 +1481,7 @@ def test_a_cancellation_during_a_deadline_bounded_call_records_cancelled_and_no_
 
         binding = scripted(ask=ask)
         task = asyncio.ensure_future(
-            deciding(binds={"default": binding}, settings=RunSettings(deadline=600))
+            deciding(binds=bound(binding), settings=RunSettings(deadline=600))
         )
         await started.wait()  # the call is under way, its deadline far off
         task.cancel()
@@ -1522,6 +1561,6 @@ def test_a_long_wording_loads_and_decides(small_bounds: SmallBounds) -> None:
     ask = dataclasses.replace(
         ASK, provides={**ASK.provides, "q:spam": Question("noul", Text(wording))}
     )
-    decision = go(slice_design(sources={"ask": ask, "look": LOOK}))
+    decision = go(slice_design(sources={"ask": ask, "body": BODY, "look": LOOK}))
     assert decision.plan.kind is PlanKind.execute
     assert read_record(decision.record.document).document == decision.record.document

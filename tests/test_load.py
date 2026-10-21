@@ -137,7 +137,7 @@ def test_a_source_and_its_questions() -> None:
         "needs": ["t:state", "t:state.sender"],
         "when": None,
         "requirement": None,
-        "batch": "mail",
+        "oracle": "mail",
         "timeout": 30,
         "payload": {"model": "m", "tags": ["a", "b"], "mood": "calm"},
         "cost": 2,
@@ -152,7 +152,7 @@ def test_a_source_and_its_questions() -> None:
         "needs": ["t:state"],
         "when": None,
         "requirement": None,
-        "batch": None,
+        "oracle": None,
         "timeout": None,
         "payload": None,
         "cost": 0,
@@ -498,7 +498,7 @@ def test_load_takes_a_design_or_a_document() -> None:
         minimal(tools=["Send"]),
         minimal(parameters={"a": Parameter(t.number(), 1), "a/b": Parameter(t.number(), 2)}),
         minimal(parameters={"a/": Parameter(t.number(), 1)}),
-        with_source(minimal(), "s", Source({"t:x": t.string}, batch="default")),
+        with_source(minimal(), "s", Source({"t:x": t.string}, oracle="default")),
         with_rule(
             with_source(minimal(), "x", Source({"t:y": t.string})), "x", rule("x")
         ),  # a source and a rule share an id
@@ -597,6 +597,20 @@ def test_a_candidate_slot_on_an_ungrounded_source_fails_checks_3_and_4() -> None
 )
 def test_check_4(design: Design) -> None:
     only(design, 4)
+
+
+def test_check_4_a_source_provides_refs_of_one_level() -> None:
+    mixed = Source({"q:x": question(), "t:y": t.string})
+    (failure,) = only(with_source(minimal(), "s", mixed), 4)
+    assert failure.names == ("s",)
+    assert (
+        failure.message == 'source "s" provides q: and t: refs; a source provides refs of one level'
+    )
+
+
+def test_check_1_names_the_oracle_default() -> None:
+    (failure,) = only(with_source(minimal(), "s", Source({"t:x": t.string}, oracle="default")), 1)
+    assert failure.message == 'source "s" has the oracle name "default"'
 
 
 # ---------------------------------------------------------------------------------------------
@@ -925,7 +939,7 @@ FORMS: list[Design] = [
     src(provides={"t:x": 1}),
     src(needs="t:x"),
     src(needs=[1]),
-    src(batch=1),
+    src(oracle=1),
     src(timeout=0),
     src(timeout=-1),
     src(timeout=float("inf")),
@@ -1916,9 +1930,9 @@ def _summed(state_field: str) -> Design:
     """A design whose class trees' types sum to 2^20 code points with ``state_field`` ``ab``:
     the state, ``t:x`` and the answer's six."""
     big = _long((_BOUND - len("record{ab: }") - len("answer")) // 2)
-    asked = Source({"t:x": "big", "q:ask": question()})
+    design = minimal(types={"big": big}, state=f"record{{{state_field}: big}}")
     return with_source(
-        minimal(types={"big": big}, state=f"record{{{state_field}: big}}"), "s", asked
+        with_source(design, "s", Source({"t:x": "big"})), "a", Source({"q:ask": question()})
     )
 
 

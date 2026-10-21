@@ -10,8 +10,8 @@ source id order before the live frontier's calls start. The live frontier's call
 ``asyncio.TaskGroup``, each task holding its call's timeout and the binding's await alone; every
 classification and append happens after the group closes, call items by first source id, then the
 source entries by source id, then each rule wavefront sorted by id, then the ``round`` item. A batch
-is the ready sources of one live frontier sharing a batch key, called through that key's binding; a
-keyless source is a batch of one through ``default``.
+is the ready sources of one live frontier naming one oracle, called through that oracle's binding; a
+source with no oracle is a batch of one through ``default``.
 
 Three ends share one path: at the round bound after the rule phase, and at the budget or the
 deadline in the source phase with no rule phase first, the pending sources are ``Unasked`` and
@@ -216,7 +216,7 @@ async def _call(
 @dataclass(slots=True)
 class _Batch:
     key: str
-    """The binding's key: the sources' batch key, or ``default``."""
+    """The binding's key: the sources' oracle name, or ``default``."""
     sources: tuple[str, ...]
     refs: tuple[str, ...]
     """Every ref the batch provides, in code-point order."""
@@ -744,13 +744,13 @@ class _Turn:
             self.ledger.write_unhashed("reads", text.unnamed, index)
 
     def batches(self, ready: list[str]) -> list[_Batch]:
-        """The live frontier's batches: the ready sources sharing a batch key form one, each
-        keyless source one of its own, in order of their first source id. ``ready`` is in source id
-        order."""
+        """The live frontier's batches: the ready sources naming one oracle form one, each
+        source with no oracle one of its own, in order of their first source id. ``ready`` is in
+        source id order."""
         groups: list[list[str]] = []
         keyed: dict[str, list[str]] = {}
         for sid in ready:
-            key = self.sources[sid].batch
+            key = self.sources[sid].oracle
             if key is None:
                 groups.append([sid])
             elif key in keyed:
@@ -786,7 +786,7 @@ class _Turn:
             calls.append(SourceCall(sid, self.loaded._payload(sid), needs, t_refs, rendered))
             refs += provided
         declared = [s.timeout for s in (self.sources[sid] for sid in sids) if s.timeout is not None]
-        key = self.sources[sids[0]].batch
+        key = self.sources[sids[0]].oracle
         return _Batch(
             key=_DEFAULT if key is None else key,
             sources=sids,

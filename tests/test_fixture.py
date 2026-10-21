@@ -29,15 +29,19 @@ from jurat._fixture import FixtureBinding, RecordedCalls
 from jurat._typed import decoded
 from jurat._types import AnswerType, Interval, ListOf, MappingOf, Nullable, RecordOf, Scalar
 from scripted import Scripted, raising, returns
-from test_decide import SPAM, go, slice_design
+from test_decide import ASK, BODY, SPAM, bound, go, slice_design
 
 NOUL = RenderedQuestion(AnswerKind.noul, "Is it spam?", ("yes", "no"))
 BLOBS = Source({"t:blob": t.bytes_, "t:weight": t.number(), "t:size": t.integer()})
-LOADED = slice_design(sources={"ask": slice_design()._design.sources["ask"], "look": BLOBS})
+LOADED = slice_design(sources={"ask": ASK, "body": BODY, "look": BLOBS})
 
 
-def ask(*, refs: tuple[str, ...] = ("t:body",), questions: Any = None) -> SourceCall:
+def ask(*, refs: tuple[str, ...] = (), questions: Any = None) -> SourceCall:
     return SourceCall("ask", None, {}, refs, {"q:spam": NOUL} if questions is None else questions)
+
+
+def body(refs: tuple[str, ...] = ("t:body",)) -> SourceCall:
+    return SourceCall("body", None, {}, refs, {})
 
 
 def look(refs: tuple[str, ...] = ("t:blob", "t:size", "t:weight")) -> SourceCall:
@@ -49,7 +53,7 @@ def recorded(loaded: LoadedDesign = LOADED, **replies: object) -> Record:
         "ask": returns(SPAM),
         "look": returns({"t:blob": b"\x00\xff", "t:weight": 3, "t:size": 4}),
     }
-    return go(loaded, binds={"default": Scripted({**defaults, **replies})}).record
+    return go(loaded, binds=bound(Scripted({**defaults, **replies}))).record
 
 
 def fixture(record: Record, loaded: LoadedDesign = LOADED) -> FixtureBinding:
@@ -78,7 +82,7 @@ def edited(record: Record, change: Any) -> Record:
 
 
 def test_each_asked_ref_gets_its_recorded_value_typed_and_provenance_is_null() -> None:
-    got = values(answer(fixture(recorded()), ask(), look()))
+    got = values(answer(fixture(recorded()), ask(), body(), look()))
     assert got == {
         "q:spam": {"yes": 0.9, "no": 0.1},
         "t:body": "text of the mail",
@@ -115,13 +119,13 @@ def test_a_ref_recorded_with_a_binding_marker_comes_back_as_that_marker(code: st
         reply["q:spam"] = {"yes": 2}
     if code == "invalid-return":
         reply["q:spam"] = Unavailable(Cause("not-returned", ["x"]))  # not one a binding may return
-    got = values(answer(fixture(recorded(ask=returns(reply))), ask()))
+    got = values(answer(fixture(recorded(ask=returns(reply))), ask(), body()))
     assert got["q:spam"] == Unavailable(Cause(code, ["q:spam"]))
     assert got["t:body"] == "text of the mail"
 
 
 def test_a_ref_recorded_with_any_other_marker_gets_no_key() -> None:
-    got = values(answer(fixture(recorded(ask=returns({"t:body": "b"}))), ask()))
+    got = values(answer(fixture(recorded(ask=returns({"t:body": "b"}))), ask(), body()))
     assert got == {"t:body": "b"}  # q:spam was not-returned
 
 
@@ -152,7 +156,7 @@ def test_a_ref_with_no_entry_under_its_sources_call_gets_no_key() -> None:
 
 
 def test_only_the_asked_refs_are_returned() -> None:
-    got = values(answer(fixture(recorded()), ask(questions={})))
+    got = values(answer(fixture(recorded()), ask(questions={}), body()))
     assert got == {"t:body": "text of the mail"}
 
 
@@ -190,7 +194,8 @@ def test_two_sources_in_two_failed_calls_get_no_keys() -> None:
 def test_each_call_is_answered_alike_and_shares_no_container() -> None:
     nested = slice_design(
         sources={
-            "ask": slice_design()._design.sources["ask"],
+            "ask": ASK,
+            "body": BODY,
             "look": Source({"t:size": t.list_(t.record(n=t.number()))}),
         }
     )
@@ -269,7 +274,8 @@ def test_decoded_builds_every_container_afresh() -> None:
 def test_a_recorded_null_is_a_value_not_a_missing_key() -> None:
     nullable = slice_design(
         sources={
-            "ask": slice_design()._design.sources["ask"],
+            "ask": ASK,
+            "body": BODY,
             "look": Source({"t:size": t.nullable(t.integer())}),
         }
     )
@@ -282,15 +288,15 @@ def test_a_recorded_null_is_a_value_not_a_missing_key() -> None:
 
 
 def merged(record: Record) -> Record:
-    """The record with look's call item folded into ask's, as one call of both sources, its
+    """The record with look's call item folded into ask's, as one call of every source, its
     outcome ``Failed`` naming every ref when either was, else returned."""
     doc = json.loads(record.document)
     log: list[Any] = doc["log"]
     first, second = 3, 4
-    assert log[first]["sources"] == ["ask"]
+    assert log[first]["sources"] == ["ask", "body"]
     assert log[second]["sources"] == ["look"]
     a, b = log[first], log.pop(second)
-    a["sources"] = ["ask", "look"]
+    a["sources"] = ["ask", "body", "look"]
     a["questions"] = {**a["questions"], **b["questions"]}
     if a["outcome"] != "returned" or b["outcome"] != "returned":
         code = (a["outcome"] if a["outcome"] != "returned" else b["outcome"])["failed"]["code"]
@@ -313,7 +319,7 @@ def test_a_subset_of_a_recorded_failed_call_of_several_sources_comes_back_as_tha
 
 def test_a_recorded_returned_call_split_across_two_batches_answers_each_half() -> None:
     binding = fixture(merged(recorded()))
-    assert values(answer(binding, ask())) == {
+    assert values(answer(binding, ask(), body())) == {
         "q:spam": {"yes": 0.9, "no": 0.1},
         "t:body": "text of the mail",
     }

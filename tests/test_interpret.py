@@ -100,18 +100,38 @@ DROP = object()
 
 
 def ask(**changes: Any) -> Source:
+    """The questions of the ``mail`` oracle; ``told`` is its ``t:`` half, so a design with
+    both makes one call."""
     fields: dict[str, Any] = {
         "provides": {
             "q:spam": Question("noul", Text("Is it spam?")),
             "q:tone": Question("choice", Text("Which tone?"), labels=("warm", "cold")),
-            "t:body": t.string,
         },
         "needs": ["t:state.subject"],
+        "oracle": "mail",
         "payload": {"model": "m", "tags": ("a", "b")},
         "cost": 2,
     }
     fields.update(changes)
     return Source(**fields)
+
+
+def told(**changes: Any) -> Source:
+    """``t:body``, ready with ``ask`` and called with it through the ``mail`` oracle."""
+    fields: dict[str, Any] = {
+        "provides": {"t:body": t.string},
+        "needs": ["t:state.subject"],
+        "oracle": "mail",
+    }
+    fields.update(changes)
+    return Source(**fields)
+
+
+def asking(**changes: Any) -> dict[str, Source]:
+    """``ask`` and its ``t:`` half ``body``: one batch, one call. A change to when the pair is
+    ready or how long it may take applies to both."""
+    shared = {k: v for k, v in changes.items() if k in ("needs", "when", "requirement", "timeout")}
+    return {"ask": ask(**changes), "body": told(**shared)}
 
 
 def look(**changes: Any) -> Source:
@@ -164,7 +184,7 @@ def run(
     loaded: LoadedDesign, replies: Mapping[str, object], **run_settings: Any
 ) -> tuple[Record, Scripted]:
     binding = Scripted(replies)
-    record = turn(loaded, {"default": binding}, STATE, **run_settings)
+    record = turn(loaded, {"default": binding, "mail": binding}, STATE, **run_settings)
     return record, binding
 
 
@@ -226,7 +246,7 @@ def test_round_0_fires_rule_wavefronts_each_sorted_by_id() -> None:
 
 def test_one_working_round_is_round_1_with_its_call_entries_rules_and_round_item() -> None:
     # Probe n: one working round is one numbered round.
-    loaded = make({"ask": ask()}, {"route": ROUTE})
+    loaded = make(asking(), {"route": ROUTE})
     record, _ = run(loaded, {"ask": ok()})
     questions = {
         "q:spam": {"identity": identity("Is it spam?"), "kind": "noul", "labels": None},
@@ -240,7 +260,7 @@ def test_one_working_round_is_round_1_with_its_call_entries_rules_and_round_item
         {
             "item": "call",
             "round": 1,
-            "sources": ["ask"],
+            "sources": ["ask", "body"],
             "outcome": "returned",
             "snapshot": None,
             "elicitation": None,
@@ -313,14 +333,16 @@ def test_rounds_are_numbered_from_1_without_a_gap() -> None:
 
 
 def test_a_call_passes_each_source_call_with_its_payload_needs_refs_and_questions() -> None:
-    record, binding = run(make({"ask": ask()}), {"ask": ok()})
+    record, binding = run(make(asking()), {"ask": ok()})
     assert record.log[3]["outcome"] == "returned"
-    ((call,),) = binding.batches
+    ((call, told),) = binding.batches
     assert call.id == "ask"
     assert call.payload == {"model": "m", "tags": ["a", "b"]}
     assert call.needs == {"t:state.subject": "hello"}
-    assert call.refs == ("t:body",)
+    assert call.refs == ()
     assert list(call.questions) == ["q:spam", "q:tone"]
+    assert (told.id, told.payload, told.needs) == ("body", None, {"t:state.subject": "hello"})
+    assert (told.refs, told.questions) == (("t:body",), {})
     assert call.questions["q:spam"] == RenderedQuestion(
         AnswerKind.noul, "Is it spam?", ("yes", "no")
     )
@@ -346,7 +368,7 @@ def test_the_identity_does_not_hash_the_source_id_or_the_ref() -> None:
     assert ident("ask", "q:spam", "Is it?") != ident("ask", "q:spam", "Is it so?")
 
 
-def test_each_keyless_source_is_its_own_call_through_default_run_concurrently() -> None:
+def test_each_source_with_no_oracle_is_its_own_call_through_default_run_concurrently() -> None:
     started: list[str] = []
     both = asyncio.Event()
 
@@ -399,7 +421,7 @@ def test_a_round_writes_asked_and_marked_sources_interleaved_by_source_id() -> N
 
 def test_a_source_with_no_needs_is_passed_none_of_the_board() -> None:
     # Probe i: a fetch could read an undeclared ref off the board.
-    sources = {"ask": ask(), "nosy": Source({"t:nosy": t.string})}
+    sources = {**asking(), "nosy": Source({"t:nosy": t.string})}
     _, binding = run(make(sources), {"ask": ok(), "nosy": returns({"t:nosy": "n"})})
     (nosy,) = [b[0] for b in binding.batches if b[0].id == "nosy"]
     assert nosy.needs == {}
@@ -420,7 +442,7 @@ def test_changing_the_needs_dict_reaches_neither_the_board_nor_the_record() -> N
         return True
 
     sources = {
-        "ask": ask(),
+        **asking(),
         "look": look(),
         "meddle": Source({"t:after": t.string}, needs=["t:profile", "q:spam", "t:state"]),
     }
@@ -435,7 +457,7 @@ def test_changing_the_needs_dict_reaches_neither_the_board_nor_the_record() -> N
 
 
 def test_a_q_need_is_passed_as_the_answer_a_rule_reads() -> None:
-    sources = {"ask": ask(), "next": Source({"t:n": t.string}, needs=["q:spam", "t:profile.name"])}
+    sources = {**asking(), "next": Source({"t:n": t.string}, needs=["q:spam", "t:profile.name"])}
     sources["look"] = look()
     _, binding = run(
         make(sources), {"ask": ok(), "look": returns(dict(LOOKED)), "next": returns({"t:n": "n"})}
@@ -467,7 +489,7 @@ def failed(record: Record, code: str, refs: list[str] = ASKED) -> None:
 
 
 def test_a_binding_that_raises_fails_the_call_with_raised_and_its_text_in_unhashed() -> None:
-    record, _ = run(make({"ask": ask()}, {"route": ROUTE}), {"ask": raising(RuntimeError("down"))})
+    record, _ = run(make(asking(), {"route": ROUTE}), {"ask": raising(RuntimeError("down"))})
     failed(record, "raised")
     assert set(record.log[3]["questions"]) == {"q:spam", "q:tone"}  # on a Failed call too
     exc = record.unhashed["exceptions"]["3"]
@@ -482,30 +504,28 @@ def test_a_binding_that_raises_fails_the_call_with_raised_and_its_text_in_unhash
 
 
 def test_a_bindings_own_timeout_error_is_raised_not_timed_out() -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": raising(TimeoutError("its own"))})
+    record, _ = run(make(asking()), {"ask": raising(TimeoutError("its own"))})
     failed(record, "raised")
 
 
 def test_a_call_past_its_timeout_is_timed_out() -> None:
-    record, _ = run(make({"ask": ask(timeout=0.02)}), {"ask": sleeping(5, ok())})
+    record, _ = run(make(asking(timeout=0.02)), {"ask": sleeping(5, ok())})
     failed(record, "timed-out")
     assert "exceptions" not in record.unhashed
 
 
 def test_the_run_settings_timeout_bounds_a_source_that_declares_none() -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": sleeping(5, ok())}, timeout=0.02)
+    record, _ = run(make(asking()), {"ask": sleeping(5, ok())}, timeout=0.02)
     failed(record, "timed-out")
 
 
 def test_a_late_result_after_a_swallowed_cancellation_is_discarded_as_timed_out() -> None:
-    record, _ = run(make({"ask": ask(timeout=0.02)}), {"ask": ignoring_cancel(5, ok())})
+    record, _ = run(make(asking(timeout=0.02)), {"ask": ignoring_cancel(5, ok())})
     failed(record, "timed-out")
 
 
 def test_a_raise_after_the_timeout_is_timed_out_with_its_text_kept() -> None:
-    record, _ = run(
-        make({"ask": ask(timeout=0.02)}), {"ask": raising_on_cancel(5, KeyError("late"))}
-    )
+    record, _ = run(make(asking(timeout=0.02)), {"ask": raising_on_cancel(5, KeyError("late"))})
     failed(record, "timed-out")
     assert record.unhashed["exceptions"]["3"]["type"] == "KeyError"
 
@@ -533,20 +553,20 @@ class DictSub(dict[str, Any]):
 def test_a_return_that_is_not_exactly_a_call_result_or_failed_is_invalid_return(
     reply: object,
 ) -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": reply})
+    record, _ = run(make(asking()), {"ask": reply})
     failed(record, "invalid-return")
     assert "invalid" not in record.unhashed["calls"]["3"]
 
 
 @pytest.mark.parametrize("code", ["raised", "timed-out", "invalid-return", "unexpected-ref"])
 def test_a_returned_failed_names_every_ref_of_the_batch_whatever_it_listed(code: str) -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": Failed(Cause(code, ["t:other", "q:spam"]))})
+    record, _ = run(make(asking()), {"ask": Failed(Cause(code, ["t:other", "q:spam"]))})
     failed(record, code)
     assert "invalid" not in record.unhashed["calls"]["3"]
 
 
 def test_a_returned_failed_with_another_code_is_invalid_return_its_code_in_unhashed() -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": Failed(Cause("refused"))})
+    record, _ = run(make(asking()), {"ask": Failed(Cause("refused"))})
     failed(record, "invalid-return")
     # A StrEnum member is no exact str: its type is named.
     assert record.unhashed["calls"]["3"]["invalid"] == {"code": "<jurat._markers.CauseCode>"}
@@ -557,28 +577,28 @@ def test_a_call_result_or_failed_built_without_init_is_invalid_return(
     cls: type[object],
 ) -> None:
     built = object.__new__(cls)
-    record, _ = run(make({"ask": ask()}), {"ask": built})
+    record, _ = run(make(asking()), {"ask": built})
     failed(record, "invalid-return")
 
 
 def test_a_failed_whose_cause_was_tampered_with_is_invalid_return() -> None:
     outcome = Failed(Cause("raised"))
     object.__setattr__(outcome.cause, "code", "raised")  # a str, no longer the member
-    record, _ = run(make({"ask": ask()}), {"ask": outcome})
+    record, _ = run(make(asking()), {"ask": outcome})
     failed(record, "invalid-return")
     assert record.unhashed["calls"]["3"]["invalid"] == {"code": "'raised'"}
 
 
 def test_an_unexpected_key_fails_the_call_and_is_kept_in_unhashed() -> None:
     values: dict[Any, Any] = {**OK, "t:nope": 1, 7: "x"}
-    record, _ = run(make({"ask": ask()}), {"ask": returns(values)})
+    record, _ = run(make(asking()), {"ask": returns(values)})
     failed(record, "unexpected-ref")
     assert record.unhashed["calls"]["3"]["unexpected"] == ["t:nope", "7"]
 
 
 def test_an_unexpected_key_outranks_a_bad_provenance_member() -> None:
     values: dict[Any, Any] = {**OK, "t:nope": 1}
-    record, _ = run(make({"ask": ask()}), {"ask": returns(values, snapshot=3)})
+    record, _ = run(make(asking()), {"ask": returns(values, snapshot=3)})
     failed(record, "unexpected-ref")
     assert record.unhashed["calls"]["3"]["invalid"] == {"snapshot": "3"}
 
@@ -590,7 +610,7 @@ def test_an_unexpected_key_outranks_a_bad_provenance_member() -> None:
 def test_a_provenance_member_not_null_or_a_domain_string_is_invalid_return(
     member: str, value: object
 ) -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": ok(**{member: value})})
+    record, _ = run(make(asking()), {"ask": ok(**{member: value})})
     failed(record, "invalid-return")
     assert record.unhashed["calls"]["3"]["invalid"] == {member: repr(value)}
 
@@ -601,7 +621,7 @@ def test_a_provenance_member_not_null_or_a_domain_string_is_invalid_return(
 
 def test_a_call_items_provenance_is_the_call_results() -> None:
     record, _ = run(
-        make({"ask": ask()}),
+        make(asking()),
         {
             "ask": ok(
                 snapshot="m-1",
@@ -637,7 +657,7 @@ class Mood(enum.StrEnum):
 def test_a_bad_usage_or_attempts_fails_nothing_and_is_recorded_null(
     member: str, value: object
 ) -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": ok(**{member: value})})
+    record, _ = run(make(asking()), {"ask": ok(**{member: value})})
     assert record.log[3]["outcome"] == "returned"
     assert record.unhashed["calls"]["3"][member] is None
     assert record.unhashed["calls"]["3"]["invalid"] == {member: repr(value)}
@@ -654,7 +674,7 @@ def stands(record: Record, *refs: str) -> None:
 
 
 def test_a_t_value_that_does_not_conform_fails_that_ref_alone() -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(t_body=3)})
+    record, _ = run(make(asking()), {"ask": with_values(t_body=3)})
     assert entry(record, "t:body")["marker"] == mark("invalid-return", "t:body")
     assert entry(record, "t:body")["call"] == 3
     stands(record, "q:spam", "q:tone")
@@ -673,7 +693,7 @@ def test_a_t_value_that_does_not_conform_fails_that_ref_alone() -> None:
     ],
 )
 def test_a_q_value_that_fails_validation_is_invalid_answer(value: object) -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(q_spam=value)})
+    record, _ = run(make(asking()), {"ask": with_values(q_spam=value)})
     assert entry(record, "q:spam")["marker"] == mark("invalid-answer", "q:spam")
     stands(record, "q:tone", "t:body")
 
@@ -683,22 +703,20 @@ class Prob(float):
 
 
 def test_a_probability_of_a_float_subclass_is_invalid_answer() -> None:
-    record, _ = run(
-        make({"ask": ask()}), {"ask": with_values(q_spam={"yes": Prob(0.9), "no": 0.1})}
-    )
+    record, _ = run(make(asking()), {"ask": with_values(q_spam={"yes": Prob(0.9), "no": 0.1})})
     assert entry(record, "q:spam")["marker"] == mark("invalid-answer", "q:spam")
 
 
 def test_an_answer_near_one_is_recorded_as_returned_and_not_flagged() -> None:
     near = {"yes": 0.4999999, "no": 0.5}
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(q_spam=near)})
+    record, _ = run(make(asking()), {"ask": with_values(q_spam=near)})
     assert entry(record, "q:spam")["value"] == answer("noul", ["yes", "no"], near)
     assert "sums" not in record.unhashed["calls"]["3"]
 
 
 def test_an_answer_off_one_is_recorded_as_returned_and_its_sum_flagged() -> None:
     off = {"yes": 0.8, "no": 0.1}
-    loaded = make({"ask": ask()}, {"route": ROUTE})
+    loaded = make(asking(), {"route": ROUTE})
     record, _ = run(loaded, {"ask": with_values(q_spam=off)})
     assert entry(record, "q:spam")["value"] == answer("noul", ["yes", "no"], off)
     assert record.unhashed["calls"]["3"]["sums"] == {"q:spam": 0.9}
@@ -726,7 +744,7 @@ def test_an_answer_off_one_is_recorded_as_returned_and_its_sum_flagged() -> None
 def test_each_answer_off_the_band_is_flagged_under_its_ref(
     spam: dict[str, float], tone: dict[str, float], sums: dict[str, float] | None
 ) -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(q_spam=spam, q_tone=tone)})
+    record, _ = run(make(asking()), {"ask": with_values(q_spam=spam, q_tone=tone)})
     stands(record, "q:spam", "q:tone", "t:body")
     call = record.unhashed["calls"]["3"]
     if sums is None:
@@ -737,7 +755,7 @@ def test_each_answer_off_the_band_is_flagged_under_its_ref(
 
 def test_an_invalid_answer_or_a_marker_is_never_flagged() -> None:
     record, _ = run(
-        make({"ask": ask()}),
+        make(asking()),
         {
             "ask": with_values(
                 q_spam={"yes": 2, "no": 0}, q_tone=Unavailable(Cause(CauseCode.refused))
@@ -750,7 +768,7 @@ def test_an_invalid_answer_or_a_marker_is_never_flagged() -> None:
 
 
 def test_a_flagged_answer_reads_back_with_its_sums() -> None:
-    loaded = make({"ask": ask()}, {"route": ROUTE})
+    loaded = make(asking(), {"route": ROUTE})
     record, _ = run(loaded, {"ask": with_values(q_spam={"yes": 0.9, "no": 0.9})})
     back = read_record(record.document)
     assert back.document == record.document
@@ -758,7 +776,7 @@ def test_a_flagged_answer_reads_back_with_its_sums() -> None:
 
 
 def test_an_omitted_ref_is_not_returned_naming_that_ref() -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(q_tone=DROP)})
+    record, _ = run(make(asking()), {"ask": with_values(q_tone=DROP)})
     assert entry(record, "q:tone")["marker"] == mark("not-returned", "q:tone")
     assert entry(record, "q:tone")["call"] == 3
     stands(record, "q:spam", "t:body")
@@ -767,7 +785,7 @@ def test_an_omitted_ref_is_not_returned_naming_that_ref() -> None:
 @pytest.mark.parametrize("code", ["refused", "invalid-answer", "invalid-return"])
 def test_an_allowed_marker_is_written_with_its_code_naming_that_ref_alone(code: str) -> None:
     returned = Unavailable(Cause(code, ["t:body", "elsewhere"]))
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(q_spam=returned)})
+    record, _ = run(make(asking()), {"ask": with_values(q_spam=returned)})
     assert entry(record, "q:spam")["marker"] == mark(code, "q:spam")
     stands(record, "q:tone", "t:body")
 
@@ -786,7 +804,7 @@ class Odd(Unavailable):
     ],
 )
 def test_any_other_marker_in_values_is_invalid_return(returned: object) -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(q_spam=returned, t_body=returned)})
+    record, _ = run(make(asking()), {"ask": with_values(q_spam=returned, t_body=returned)})
     assert entry(record, "q:spam")["marker"] == mark("invalid-return", "q:spam")
     assert entry(record, "t:body")["marker"] == mark("invalid-return", "t:body")
 
@@ -794,7 +812,7 @@ def test_any_other_marker_in_values_is_invalid_return(returned: object) -> None:
 def test_a_tampered_allowed_marker_is_invalid_return() -> None:
     returned = Unavailable(Cause("refused"))
     object.__setattr__(returned, "cause", "refused")
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(t_body=returned)})
+    record, _ = run(make(asking()), {"ask": with_values(t_body=returned)})
     assert entry(record, "t:body")["marker"] == mark("invalid-return", "t:body")
 
 
@@ -826,7 +844,7 @@ def test_a_t_value_of_the_wrong_type_is_invalid_return(ref: str, value: object) 
 
 
 def test_a_string_subclass_value_is_written_as_its_string_data() -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(t_body=Mood.calm)})
+    record, _ = run(make(asking()), {"ask": with_values(t_body=Mood.calm)})
     assert entry(record, "t:body")["value"] == "calm"
 
 
@@ -1219,7 +1237,7 @@ def test_a_helper_call_is_listed_in_derivation_even_when_the_rule_then_raises() 
         pick_with_margin(r, "q:spam", 0.5, 0.1)
         raise RuntimeError("after the helper")
 
-    loaded = make({"ask": ask()}, {"r": rule("r", fn, "q:spam")})
+    loaded = make(asking(), {"r": rule("r", fn, "q:spam")})
     record, _ = run(loaded, {"ask": ok()})
     assert entry(record, "d:r")["marker"] == mark("raised", "r")
     assert entry(record, "d:r")["derivation"] == [
@@ -1252,7 +1270,7 @@ def needing(*needs: str) -> Source:
 
 
 def test_an_unavailable_need_gives_need_unavailable_naming_it_with_no_call() -> None:
-    sources = {"ask": ask(), "next": needing("t:body")}
+    sources = {**asking(), "next": needing("t:body")}
     rules = {"after": rule("after", lambda r: True, "t:out")}
     record, binding = run(make(sources, rules), {"ask": raising(RuntimeError("x"))})
     assert entry(record, "t:out")["marker"] == mark("need-unavailable", "t:body")
@@ -1270,7 +1288,7 @@ def test_an_unavailable_need_gives_need_unavailable_naming_it_with_no_call() -> 
 
 def test_need_unavailable_outranks_need_undetermined_and_names_only_its_own_kind() -> None:
     sources = {
-        "ask": ask(),
+        **asking(),
         "look": look(),
         "next": needing("d:unsure", "t:body", "t:blob", "t:profile.name"),
     }
@@ -1433,11 +1451,27 @@ def test_a_cancellation_of_interpret_cancels_the_frontier_and_appends_nothing_of
 # Latency does not reach the record
 
 
+def pairs(n: int, **changes: Any) -> dict[str, Source]:
+    """``n`` pairs: ``s{i}`` asks ``q:k{i}`` and ``t{i}`` provides ``t:v{i}``, both through the
+    oracle ``o{i}``, so each pair is one call answered under ``s{i}``."""
+    sources: dict[str, Source] = {}
+    for i in range(n):
+        sources[f"s{i}"] = Source({f"q:k{i}": Question("noul", Text(f"Is {i}?"))}, oracle=f"o{i}")
+        sources[f"t{i}"] = Source({f"t:v{i}": t.string}, oracle=f"o{i}", **changes)
+    return sources
+
+
+def valued(batch: Batch) -> dict[str, Any]:
+    """Each ``t:`` ref of the batch ``"v"`` and each question ``NOUL``."""
+    values: dict[str, Any] = {}
+    for call in batch:
+        values.update(dict.fromkeys(call.refs, "v"))
+        values.update(dict.fromkeys(call.questions, NOUL))
+    return values
+
+
 def test_shuffled_latencies_give_identical_bytes() -> None:
-    sources = {
-        f"s{i}": Source({f"t:v{i}": t.string, f"q:k{i}": Question("noul", Text(f"Is {i}?"))})
-        for i in range(5)
-    }
+    sources = pairs(5)
     sources["late"] = Source({"t:late": t.string}, needs=["d:sum"])
     sources["later"] = Source({"t:later": t.string}, needs=["t:late", "t:v0"])
     rules = {"sum": rule("sum", lambda r: True, *(f"q:k{i}" for i in range(5)))}
@@ -1453,15 +1487,14 @@ def test_shuffled_latencies_give_identical_bytes() -> None:
             batch: Batch, rng: random.Random = rng, finished: list[str] = finished
         ) -> object:
             await asyncio.sleep(rng.random() / 100)
-            call = batch[0]
-            finished.append(call.id)
-            values: dict[str, Any] = dict.fromkeys(call.refs, "v")
-            values.update(dict.fromkeys(call.questions, NOUL))
-            if call.id == "s3":
+            finished.append(batch[0].id)
+            if batch[0].id == "s3":
                 raise RuntimeError("one fails")
-            return returns(values)
+            return returns(valued(batch))
 
-        record = turn(loaded, {"default": Scripted(dict.fromkeys(sources, reply))}, STATE)
+        scripted_ = Scripted(dict.fromkeys(sources, reply))
+        binds = {"default": scripted_} | {f"o{i}": scripted_ for i in range(5)}
+        record = turn(loaded, binds, STATE)
         hashes.add(record.record_hash)
         orders.add(tuple(finished))
     assert len(orders) > 1
@@ -1551,7 +1584,7 @@ def test_a_tuple_in_the_live_state_is_passed_as_a_fresh_tuple() -> None:
 
 def test_a_duplicate_usage_key_is_recorded_null() -> None:
     usage = {Twin("in"): 1, Twin("in"): 2}
-    record, _ = run(make({"ask": ask()}), {"ask": ok(usage=usage)})
+    record, _ = run(make(asking()), {"ask": ok(usage=usage)})
     assert record.unhashed["calls"]["3"]["usage"] is None
     assert "usage" in record.unhashed["calls"]["3"]["invalid"]
 
@@ -1651,7 +1684,7 @@ class Masked:
 def test_a_q_value_or_probability_whose_repr_or_class_raises_is_invalid_answer(
     value: Callable[[], object],
 ) -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(q_spam=value())})
+    record, _ = run(make(asking()), {"ask": with_values(q_spam=value())})
     assert entry(record, "q:spam")["marker"] == mark("invalid-answer", "q:spam")
 
 
@@ -1660,19 +1693,19 @@ def test_a_q_values_label_key_whose_class_or_repr_raises_is_invalid_answer(
     key: Callable[[], object],
 ) -> None:
     values = {key(): 0.9, "no": 0.1}
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(q_spam=values)})
+    record, _ = run(make(asking()), {"ask": with_values(q_spam=values)})
     assert entry(record, "q:spam")["marker"] == mark("invalid-answer", "q:spam")
 
 
 def test_a_values_key_whose_class_raises_is_unexpected() -> None:
     values: dict[Any, Any] = {**OK, Masked(): 1}
-    record, _ = run(make({"ask": ask()}), {"ask": returns(values)})
+    record, _ = run(make(asking()), {"ask": returns(values)})
     failed(record, "unexpected-ref")
     assert len(record.unhashed["calls"]["3"]["unexpected"]) == 1
 
 
 def test_a_t_value_whose_class_raises_is_invalid_return() -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": with_values(t_body=Masked())})
+    record, _ = run(make(asking()), {"ask": with_values(t_body=Masked())})
     assert entry(record, "t:body")["marker"] == mark("invalid-return", "t:body")
 
 
@@ -1695,7 +1728,7 @@ def test_a_bindings_base_exception_propagates_bare_with_no_item_of_its_round() -
 
 def test_a_late_call_results_usage_and_attempts_are_null_and_nothing_else_is_kept() -> None:
     late = ok(usage={"in": 3}, attempts=2, snapshot=5)
-    record, _ = run(make({"ask": ask(timeout=0.02)}), {"ask": ignoring_cancel(5, late)})
+    record, _ = run(make(asking(timeout=0.02)), {"ask": ignoring_cancel(5, late)})
     failed(record, "timed-out")
     call = record.unhashed["calls"]["3"]
     assert (call["usage"], call["attempts"]) == (None, None)
@@ -1705,7 +1738,7 @@ def test_a_late_call_results_usage_and_attempts_are_null_and_nothing_else_is_kep
 
 @pytest.mark.parametrize("usage", [{Mood.calm: 1}, {"in": 2**60}, {"in": -(2**60)}])
 def test_a_usage_outside_the_value_domain_is_recorded_null(usage: object) -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": ok(usage=usage)})
+    record, _ = run(make(asking()), {"ask": ok(usage=usage)})
     assert record.unhashed["calls"]["3"]["usage"] is None
     shown = "<builtins.dict>" if Mood.calm in usage else repr(usage)  # type: ignore[operator]
     assert record.unhashed["calls"]["3"]["invalid"] == {"usage": shown}
@@ -1714,14 +1747,14 @@ def test_a_usage_outside_the_value_domain_is_recorded_null(usage: object) -> Non
 def test_a_failed_whose_cause_is_not_exactly_a_cause_is_invalid_return() -> None:
     outcome = Failed(Cause("raised"))
     object.__setattr__(outcome, "cause", CauseCode.raised)
-    record, _ = run(make({"ask": ask()}), {"ask": outcome})
+    record, _ = run(make(asking()), {"ask": outcome})
     failed(record, "invalid-return")
 
 
 def test_a_carried_provider_is_refused_at_entry_in_v0_0_1() -> None:
     from jurat._interpret import _InterpretError, interpret
 
-    loaded = make({"ask": ask()})
+    loaded = make(asking())
     run_ = settings()
     ledger = open_ledger(loaded, STATE, run_)
     with pytest.raises(_InterpretError, match=r"^carried providers arrive"):
@@ -1773,7 +1806,7 @@ def test_a_score_question_is_passed_its_levels_and_recorded_with_them() -> None:
 
 def test_two_values_keys_of_one_string_data_fail_the_call_ahead_of_an_unexpected_key() -> None:
     values: dict[Any, Any] = {**OK, Twin("t:body"): "again", "t:nope": 1}
-    record, _ = run(make({"ask": ask()}), {"ask": returns(values)})
+    record, _ = run(make(asking()), {"ask": returns(values)})
     failed(record, "invalid-return")
     assert "unexpected" not in record.unhashed["calls"]["3"]
 
@@ -1889,14 +1922,15 @@ def test_each_items_unhashed_members_come_after_its_append_and_before_the_next()
             seen[index] = {f"{m}/{k}" for m in members for k in unhashed.get(m, {})}
 
     loaded = make(
-        {"ask": ask(), "look": look()},
+        {**asking(), "look": look()},
         {"bad": rule("bad", raises, "t:body"), "nosy": rule("nosy", nosy, "t:body")},
     )
     run_settings = settings()
     ledger = open_ledger(loaded, STATE, run_settings, observer)
     box.append(ledger)
     binding = Scripted({"ask": raising(RuntimeError("binding")), "look": returns(LOOKED)})
-    asyncio.run(interpret_on(ledger, loaded, STATE, {"default": binding}, run_settings))
+    binds = {"default": binding, "mail": binding}
+    asyncio.run(interpret_on(ledger, loaded, STATE, binds, run_settings))
     unhashed = ledger.close().unhashed
     keys = [(m, int(k)) for m in ("calls", "exceptions", "reads") for k in unhashed.get(m, {})]
     assert {m for m, _ in keys} == {"calls", "exceptions", "reads"}
@@ -1947,7 +1981,7 @@ def gating(
         minimal(state=GATE_STATE_T, sources=sources, rules=rules or {}, **changes),
     )
     binding = Scripted(dict.fromkeys(sources, answers) | dict(replies or {}))
-    return turn(loaded, {"default": binding}, GATE_STATE), binding
+    return turn(loaded, {"default": binding, "mail": binding}, GATE_STATE), binding
 
 
 async def answers(batch: Batch) -> object:
@@ -2145,14 +2179,14 @@ def test_a_helper_on_a_whens_view_is_when_failed_and_caught_the_when_goes_on() -
         return True
 
     sources = {
-        "ask": ask(needs=[]),
+        **asking(needs=[]),
         "s": gated(uses, None, "q:spam"),
         "u": gated(catches, None, "q:spam", tag="_u"),
     }
     record, binding = gating(sources, replies={"ask": ok()})
     marked(record, mark("when-failed", "s"))
     assert "pick_with_margin" in record.unhashed["exceptions"][index_of(record, "t:alt")]["message"]
-    assert asked(binding) == ["ask", "u"]
+    assert asked(binding) == ["ask", "body", "u"]
 
 
 def on_flag(*values: object) -> SourceRequirement:
@@ -2349,10 +2383,7 @@ def reads_v0(r: Any) -> bool:
 
 
 def test_shuffled_latencies_give_identical_bytes_with_whens_and_requirements() -> None:
-    sources = {
-        f"s{i}": Source({f"t:v{i}": t.string, f"q:k{i}": Question("noul", Text(f"Is {i}?"))})
-        for i in range(4)
-    }
+    sources = pairs(4)
     sources["gate"] = Source({"t:g": t.string}, needs=["t:v0"], when=When(reads_v0, version="1"))
     sources["shut"] = Source({"t:h": t.string}, needs=["t:v1"], when=When(raises("x"), version="1"))
     sources["want"] = Source({"t:w": t.string}, requirement=SourceRequirement("d:sum", [True]))
@@ -2371,13 +2402,12 @@ def test_shuffled_latencies_give_identical_bytes_with_whens_and_requirements() -
             batch: Batch, rng: random.Random = rng, finished: list[str] = finished
         ) -> object:
             await asyncio.sleep(rng.random() / 100)
-            call = batch[0]
-            finished.append(call.id)
-            values: dict[str, Any] = dict.fromkeys(call.refs, "v")
-            values.update(dict.fromkeys(call.questions, NOUL))
-            return returns(values)
+            finished.append(batch[0].id)
+            return returns(valued(batch))
 
-        records.append(turn(loaded, {"default": Scripted(dict.fromkeys(sources, reply))}, STATE))
+        scripted_ = Scripted(dict.fromkeys(sources, reply))
+        binds = {"default": scripted_} | {f"o{i}": scripted_ for i in range(4)}
+        records.append(turn(loaded, binds, STATE))
         hashes.add(records[-1].record_hash)
         orders.add(tuple(finished))
     assert len(orders) > 1
@@ -2697,20 +2727,25 @@ def test_a_record_slot_renders_as_its_canonical_encoding() -> None:
 
 
 # ---------------------------------------------------------------------------------------------
-# Batch keys
+# Oracle names
 
 
 def keyed(name: str, key: str | None = "k", **changes: Any) -> Source:
     fields: dict[str, Any] = {
-        "provides": {
-            f"q:{name}": Question("noul", Text(f"Is {name}?")),
-            f"t:{name}": t.string,
-        },
-        "batch": key,
+        "provides": {f"q:{name}": Question("noul", Text(f"Is {name}?"))},
+        "oracle": key,
         "cost": 1,
     }
     fields.update(changes)
     return Source(**fields)
+
+
+def paired(name: str, key: str | None = "k", **changes: Any) -> dict[str, Source]:
+    """``keyed(name)`` and ``{name}t``, its ``t:{name}`` under the same oracle, ready when it
+    is and held to its timeout: a batch of both levels, whose entries keep source id order."""
+    shared = {k: v for k, v in changes.items() if k in ("needs", "timeout")}
+    typed = Source({f"t:{name}": t.string}, oracle=key, **shared)
+    return {name: keyed(name, key, **changes), f"{name}t": typed}
 
 
 def answering(batch: Batch) -> dict[str, Any]:
@@ -2728,7 +2763,7 @@ async def answer_all(batch: Batch) -> object:
 def keyed_run(
     sources: dict[str, Source], replies: Mapping[str, object] | None = None, **run_: Any
 ) -> tuple[Record, dict[str, Scripted]]:
-    keys = {s.batch for s in sources.values()} | {"default"}
+    keys = {s.oracle for s in sources.values()} | {"default"}
     keys.discard(None)
     binds = {
         cast(str, k): Scripted(dict.fromkeys(sources, answer_all) | dict(replies or {}))
@@ -2742,66 +2777,70 @@ def calls_of(record: Record) -> list[dict[str, Any]]:
 
 
 def test_a_keyed_batch_is_one_call_through_its_keys_binding_in_source_id_order() -> None:
-    sources = {"c": keyed("c", cost=0.5), "a": keyed("a"), "b": keyed("b", cost=2)}
+    sources = {**paired("c", cost=0.5), **paired("a"), **paired("b", cost=2)}
     record, binds = keyed_run(sources)
     (batch,) = binds["k"].batches
-    assert [call.id for call in batch] == ["a", "b", "c"]
+    assert [call.id for call in batch] == ["a", "at", "b", "bt", "c", "ct"]
     assert binds["default"].batches == []
     (item,) = calls_of(record)
-    assert item["sources"] == ["a", "b", "c"]
+    assert item["sources"] == ["a", "at", "b", "bt", "c", "ct"]
     assert list(item["questions"]) == ["q:a", "q:b", "q:c"]
     for ref in ("q:a", "t:a", "q:b", "t:b", "q:c", "t:c"):
         assert entry(record, ref)["call"] == 3
-    assert entry(record, "t:b")["value"] == "b"
+    assert entry(record, "t:b")["value"] == "bt"
     assert body(record)[-1] == {"item": "round", "round": 1, "cost": 3.5, "deadline": False}
 
 
-def test_call_items_go_by_first_source_id_keyless_sources_alone_through_default() -> None:
+def test_call_items_go_by_first_source_id_sources_with_no_oracle_alone_through_default() -> None:
     sources = {
-        "b": keyed("b", "k"),
-        "a": keyed("a", None),
-        "d": keyed("d", "j"),
-        "c": keyed("c", "k"),
-        "e": keyed("e", None),
+        **paired("b", "k"),
+        **paired("a", None),
+        **paired("d", "j"),
+        **paired("c", "k"),
+        **paired("e", None),
     }
     record, binds = keyed_run(sources)
-    assert [i["sources"] for i in calls_of(record)] == [["a"], ["b", "c"], ["d"], ["e"]]
-    assert [[c.id for c in b] for b in binds["default"].batches] in (
-        [["a"], ["e"]],
-        [["e"], ["a"]],
-    )
-    assert [[c.id for c in b] for b in binds["j"].batches] == [["d"]]
+    # A source with no oracle is a call of its own, so a and at, e and et are four calls.
+    assert [i["sources"] for i in calls_of(record)] == [
+        ["a"], ["at"], ["b", "bt", "c", "ct"], ["d", "dt"], ["e"], ["et"],
+    ]  # fmt: skip
+    alone = [[c.id for c in b] for b in binds["default"].batches]
+    assert sorted(alone) == [["a"], ["at"], ["e"], ["et"]]
+    assert [[c.id for c in b] for b in binds["j"].batches] == [["d", "dt"]]
     # Entries by source id after every call item, not batch by batch.
     assert [i.get("ref") for i in body(record) if i["item"] == "entry"] == [
         "q:a", "t:a", "q:b", "t:b", "q:c", "t:c", "q:d", "t:d", "q:e", "t:e",
     ]  # fmt: skip
-    assert [entry(record, f"t:{s}")["call"] for s in "abcde"] == [3, 4, 4, 5, 6]
+    assert [entry(record, f"t:{s}")["call"] for s in "abcde"] == [4, 5, 5, 6, 8]
 
 
 def test_a_keyed_source_that_is_not_ready_is_left_out_of_its_batch() -> None:
     sources = {
-        "a": keyed("a"),
-        "b": keyed("b", needs=["t:x"]),
+        **paired("a"),
+        **paired("b", needs=["t:x"]),
         "x": Source({"t:x": t.string}),
     }
     record, binds = keyed_run(sources, {"x": raising(RuntimeError("x"))})
-    assert [[c.id for c in b] for b in binds["k"].batches] == [["a"]]
+    assert [[c.id for c in b] for b in binds["k"].batches] == [["a", "at"]]
     assert entry(record, "t:b")["marker"] == mark("need-unavailable", "t:x")
     assert entry(record, "t:b")["call"] is None
 
 
 def test_a_key_with_no_ready_source_makes_no_call() -> None:
-    sources = {"b": keyed("b", needs=["t:x"]), "x": Source({"t:x": t.string})}
+    sources = {**paired("b", needs=["t:x"]), "x": Source({"t:x": t.string})}
     record, binds = keyed_run(sources, {"x": raising(RuntimeError("x"))})
     assert binds["k"].batches == []
     assert [i["sources"] for i in calls_of(record)] == [["x"]]
 
 
 def test_sources_of_one_key_ready_in_two_rounds_are_two_calls() -> None:
-    sources = {"a": keyed("a"), "b": keyed("b", needs=["t:a"])}
+    sources = {**paired("a"), **paired("b", needs=["t:a"])}
     record, binds = keyed_run(sources)
-    assert [[c.id for c in b] for b in binds["k"].batches] == [["a"], ["b"]]
-    assert [(i["round"], i["sources"]) for i in calls_of(record)] == [(1, ["a"]), (2, ["b"])]
+    assert [[c.id for c in b] for b in binds["k"].batches] == [["a", "at"], ["b", "bt"]]
+    assert [(i["round"], i["sources"]) for i in calls_of(record)] == [
+        (1, ["a", "at"]),
+        (2, ["b", "bt"]),
+    ]
 
 
 KEYED_REFS = ["q:a", "q:b", "t:a", "t:b"]
@@ -2819,7 +2858,7 @@ KEYED_REFS = ["q:a", "q:b", "t:a", "t:b"]
 def test_a_structural_fault_fails_every_ref_of_the_batch_in_code_point_order(
     reply: object, code: str
 ) -> None:
-    record, _ = keyed_run({"b": keyed("b"), "a": keyed("a")}, {"a": reply})
+    record, _ = keyed_run({**paired("b"), **paired("a")}, {"a": reply})
     (item,) = calls_of(record)
     assert item["outcome"] == {"failed": {"code": code, "refs": KEYED_REFS}}
     for ref in KEYED_REFS:
@@ -2828,7 +2867,7 @@ def test_a_structural_fault_fails_every_ref_of_the_batch_in_code_point_order(
 
 
 def test_a_keyed_batch_past_its_timeout_fails_every_ref_timed_out() -> None:
-    sources = {"a": keyed("a", timeout=0.02), "b": keyed("b")}
+    sources = {**paired("a", timeout=0.02), **paired("b")}
     record, _ = keyed_run(sources, {"a": sleeping(5, None)})
     (item,) = calls_of(record)
     assert item["outcome"] == {"failed": {"code": "timed-out", "refs": KEYED_REFS}}
@@ -2838,15 +2877,15 @@ def test_a_siblings_key_is_no_unexpected_ref_and_one_from_outside_the_batch_is()
     async def siblings(batch: Batch) -> object:
         return returns(answering(batch))
 
-    record, _ = keyed_run({"a": keyed("a"), "b": keyed("b")}, {"a": siblings})
+    record, _ = keyed_run({**paired("a"), **paired("b")}, {"a": siblings})
     assert calls_of(record)[0]["outcome"] == "returned"
 
     async def outside(batch: Batch) -> object:
         return returns({**answering(batch), "t:c": "c"})
 
-    sources = {"a": keyed("a"), "b": keyed("b"), "c": keyed("c", None)}
+    sources = {**paired("a"), **paired("b"), **paired("c", None)}
     record, _ = keyed_run(sources, {"a": outside})
-    (item,) = [i for i in calls_of(record) if i["sources"] == ["a", "b"]]
+    (item,) = [i for i in calls_of(record) if i["sources"] == ["a", "at", "b", "bt"]]
     assert item["outcome"] == {"failed": {"code": "unexpected-ref", "refs": KEYED_REFS}}
     assert record.unhashed["calls"][str(record.log.index(item))]["unexpected"] == ["t:c"]
 
@@ -2858,22 +2897,22 @@ def test_a_value_fault_or_an_omitted_ref_in_a_batch_hits_that_ref_alone() -> Non
         values["q:a"] = {"yes": 2}
         return returns(values)
 
-    record, _ = keyed_run({"a": keyed("a"), "b": keyed("b")}, {"a": partial})
+    record, _ = keyed_run({**paired("a"), **paired("b")}, {"a": partial})
     assert calls_of(record)[0]["outcome"] == "returned"
     assert entry(record, "t:b")["marker"] == mark("not-returned", "t:b")
     assert entry(record, "q:a")["marker"] == mark("invalid-answer", "q:a")
-    assert entry(record, "t:a")["value"] == "a"
+    assert entry(record, "t:a")["value"] == "at"
     assert entry(record, "q:b")["value"]["probabilities"] == NOUL
     assert {entry(record, r)["call"] for r in KEYED_REFS} == {3}
 
 
 def test_a_mixed_batch_takes_the_largest_declared_timeout_never_the_run_setting() -> None:
     # A declares 0.02, B none, the run setting 10: the batch's timeout is 0.02.
-    sources = {"a": keyed("a", timeout=0.02), "b": keyed("b")}
+    sources = {**paired("a", timeout=0.02), **paired("b")}
     record, _ = keyed_run(sources, {"a": sleeping(5, None)}, timeout=10)
     assert calls_of(record)[0]["outcome"]["failed"]["code"] == "timed-out"
     # The largest declared: 5 outlasts a call of 0.05.
-    sources = {"a": keyed("a", timeout=0.02), "b": keyed("b", timeout=5)}
+    sources = {**paired("a", timeout=0.02), **paired("b", timeout=5)}
     later = sleeping(0.05, None)
 
     async def slow(batch: Batch) -> object:
@@ -2895,7 +2934,7 @@ def test_one_binding_is_called_concurrently_with_itself_under_two_keys() -> None
         await asyncio.wait_for(both.wait(), 2)
         return returns(answering(batch))
 
-    sources = {"a": keyed("a", "k"), "b": keyed("b", "j")}
+    sources = {**paired("a", "k"), **paired("b", "j")}
     binding = Scripted({"a": wait, "b": wait})
     record = turn(make(sources), {"k": binding, "j": binding}, STATE)
     assert sorted(started) == ["a", "b"]
@@ -2904,13 +2943,15 @@ def test_one_binding_is_called_concurrently_with_itself_under_two_keys() -> None
 
 def test_each_source_in_a_batch_gets_its_own_copy_of_a_shared_need() -> None:
     async def meddle(batch: Batch) -> object:
-        first, second = batch
+        first, *others = batch
+        assert len(others) == 3
         first.needs["t:state.subject"] = "Mallory"
-        assert second.needs == {"t:state.subject": "hello"}
+        for other in others:
+            assert other.needs == {"t:state.subject": "hello"}
         return returns(answering(batch))
 
     need = ["t:state.subject"]
-    sources = {"a": keyed("a", needs=need), "b": keyed("b", needs=need)}
+    sources = {**paired("a", needs=need), **paired("b", needs=need)}
     record, _ = keyed_run(sources, {"a": meddle})
     assert calls_of(record)[0]["outcome"] == "returned"
 
@@ -3272,7 +3313,7 @@ def test_a_cut_past_the_fixpoint_cuts_nothing() -> None:
 def test_a_deadline_with_no_clock_or_a_cut_beside_a_clock_is_an_engine_defect() -> None:
     from jurat._interpret import _InterpretError, interpret
 
-    loaded = make({"ask": ask()})
+    loaded = make(asking())
     cases = (
         (None, None, 1.0, "^a deadline runs from decide's clock reading$"),
         (0.0, (1, False), None, "^the cut stands in for the clock, never beside it$"),
@@ -3305,12 +3346,11 @@ def test_shuffled_latencies_give_identical_bytes_over_keys_slots_and_a_budget_cu
     wording = Text("Is {s} {i} at {bar}?", [SLOTS[0], slot("i", ref="t:seed"), SLOTS[1]])
     sources: dict[str, Source] = {}
     for i in range(6):
+        oracle = None if i == 5 else f"key{i % 2}"
         sources[f"s{i}"] = Source(
-            {f"t:v{i}": t.string, f"q:k{i}": Question("noul", wording)},
-            needs=["t:seed"],
-            batch=None if i == 5 else f"key{i % 2}",
-            cost=1,
+            {f"q:k{i}": Question("noul", wording)}, needs=["t:seed"], oracle=oracle, cost=1
         )
+        sources[f"t{i}"] = Source({f"t:v{i}": t.string}, needs=["t:seed"], oracle=oracle)
     sources["seed"] = Source({"t:seed": t.string}, cost=1)
     sources["late"] = Source({"t:late": t.string}, needs=["d:sum"], cost=1)
     sources["later"] = Source({"t:later": t.string}, needs=["t:late"], cost=1)
@@ -3334,12 +3374,13 @@ def test_shuffled_latencies_give_identical_bytes_over_keys_slots_and_a_budget_cu
 
         scripted_ = Scripted(dict.fromkeys(sources, reply))
         binds = {"default": scripted_, "key0": scripted_, "key1": scripted_}
-        # Round 1 asks seed (1), round 2 the six (6), round 3 late is over a budget of 7.
+        # Round 1 asks seed (1), round 2 the six asking sources (6), round 3 late is over a
+        # budget of 7. s5 and t5 name no oracle, so each is a call of its own.
         record = turn(loaded, binds, STATE, budget=7)
         hashes.add(record.record_hash)
         orders.add(tuple(finished))
         assert entry(record, "t:late")["marker"] == mark("over-budget", kind="Unasked")
-        assert [len(i["sources"]) for i in calls_of(record)] == [1, 3, 2, 1]
+        assert [len(i["sources"]) for i in calls_of(record)] == [1, 6, 4, 1, 1]
     assert len(orders) > 1
     assert len(hashes) == 1
 
@@ -3399,14 +3440,14 @@ def test_a_binding_value_over_the_size_bounds_fails_its_ref_alone(
 def test_a_snapshot_over_the_size_bounds_is_invalid_return_and_unrepresentable(
     small_bounds: SmallBounds,
 ) -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": ok(snapshot=_BIG)})
+    record, _ = run(make(asking()), {"ask": ok(snapshot=_BIG)})
     assert record.log[3]["outcome"] == {"failed": {"code": "invalid-return", "refs": ASKED}}
     assert record.log[3]["snapshot"] is None
     assert record.unhashed["calls"]["3"]["invalid"] == {"snapshot": "<unrepresentable>"}
 
 
 def test_a_usage_over_the_size_bounds_is_recorded_null(small_bounds: SmallBounds) -> None:
-    record, _ = run(make({"ask": ask()}), {"ask": ok(usage={_BIG: 1})})
+    record, _ = run(make(asking()), {"ask": ok(usage={_BIG: 1})})
     assert record.log[3]["outcome"] == "returned"
     assert record.unhashed["calls"]["3"]["usage"] is None
     assert record.unhashed["calls"]["3"]["invalid"] == {"usage": "<unrepresentable>"}
@@ -3421,7 +3462,7 @@ def test_an_exception_whose_arguments_are_too_large_has_no_text(small_bounds: Sm
 
 def test_a_long_wording_is_held_to_no_size_bound(small_bounds: SmallBounds) -> None:
     wording = "Is it spam? " + "Consider every word of it. " * 20  # past the 2^8 code points set
-    loaded = make({"ask": ask(provides={"q:spam": Question("noul", Text(wording))})})
+    loaded = make(asking(provides={"q:spam": Question("noul", Text(wording))}))
     record, binding = run(loaded, {"ask": returns({"q:spam": NOUL})})
     assert record.log[3]["outcome"] == "returned"
     assert binding.batches[0][0].questions["q:spam"].wording == wording

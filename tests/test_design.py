@@ -89,7 +89,7 @@ def test_source_defaults_and_its_provides() -> None:
     source = Source({"t:a": Name("string"), "t:b": {"type": t.string, "candidates": True}})
     assert type(source.provides["t:a"]) is str
     assert dict(source.provides["t:b"]) == {"type": "string", "candidates": True}
-    assert (source.cost, source.feedback, source.payload, source.batch) == (0, False, None, None)
+    assert (source.cost, source.feedback, source.payload, source.oracle) == (0, False, None, None)
     assert (source.timeout, source.when, source.requirement, source.grounded) == (None,) * 4
 
 

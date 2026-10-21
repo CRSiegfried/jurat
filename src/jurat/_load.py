@@ -446,14 +446,25 @@ class _Loader:
 
     def check_4(self) -> None:
         for sid, source in self.sources():
+            provided: set[str] = set()
             for ref in source.provides:
                 parsed = _declared(ref)
-                if parsed is not None and parsed.level not in ("q", "t"):
+                if parsed is None:
+                    continue
+                provided.add(parsed.level)
+                if parsed.level not in ("q", "t"):
                     self.fail(
                         4,
                         (sid, ref),
-                        f"source {_q(sid)} provides {_q(ref)}; a source provides q: and t: refs",
+                        f"source {_q(sid)} provides {_q(ref)}; a source provides q: or t: refs",
                     )
+            if {"q", "t"} <= provided:
+                self.fail(
+                    4,
+                    (sid,),
+                    f"source {_q(sid)} provides q: and t: refs; "
+                    "a source provides refs of one level",
+                )
         for rid, rule in self.rules():
             parsed = _declared(rule.provides)
             if parsed is not None and rule.provides != f"d:{rid}":
@@ -514,8 +525,8 @@ class _Loader:
             if len(used) > 1:
                 self.fail(1, (name,), f"{_q(name)} is declared more than once: {', '.join(used)}")
         for sid, source in self.sources():
-            if source.batch == "default":
-                self.fail(1, (sid,), f'source {_q(sid)} has the batch key "default"')
+            if source.oracle == "default":
+                self.fail(1, (sid,), f'source {_q(sid)} has the oracle name "default"')
         for node, path in _nodes(self.leaves):
             self.fail(1, (node, path), f"parameter {_q(node)} is a node of {_q(path)}")
         for owner, where, what, members, refs in self.unordered():
@@ -1381,7 +1392,7 @@ def _source(source: Source) -> dict[str, Any]:
         "needs": _unordered(source.needs),
         "when": None if w is None else _function(w.function, w.version),
         "requirement": None if r is None else {"ref": r.ref, "values": _unordered(r.values)},
-        "batch": source.batch,
+        "oracle": source.oracle,
         "timeout": source.timeout,
         "payload": source.payload,
         "cost": source.cost,
@@ -1569,7 +1580,7 @@ _SOURCE = frozenset(
         "needs",
         "when",
         "requirement",
-        "batch",
+        "oracle",
         "timeout",
         "payload",
         "cost",
@@ -1943,7 +1954,7 @@ def _build(doc: dict[str, Any], resolved: Mapping[str, Any]) -> Design:
             needs=s["needs"],
             when=s["when"] if w is None else When(resolved[f"{sid}.when"], w["version"]),
             requirement=s["requirement"] if r is None else SourceRequirement(r["ref"], r["values"]),
-            batch=s["batch"],
+            oracle=s["oracle"],
             timeout=s["timeout"],
             payload=s["payload"],
             cost=s["cost"],

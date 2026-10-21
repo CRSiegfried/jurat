@@ -201,7 +201,7 @@ class Source:
     needs: Sequence[str] = ()
     when: When | None = None
     requirement: SourceRequirement | None = None
-    batch: str | None = None
+    oracle: str | None = None
     timeout: float | None = None
     payload: Any = None
     cost: float = 0
@@ -218,7 +218,7 @@ class Source:
             self,
             provides=provides,
             needs=_strings(self.needs),
-            batch=_string(self.batch),
+            oracle=_string(self.oracle),
             grounded=_string(self.grounded),
         )
 

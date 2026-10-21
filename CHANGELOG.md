@@ -4,6 +4,11 @@ All notable changes to jurat are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Changed
+
+- `Source.batch` is now `Source.oracle`, the name of the binding that answers the source, and the design document's `batch` member is `oracle`. Every design hash changes, so a record written under 0.0.1 names a design hash that no reloaded design has. `EntryRefusal` messages name the oracle, and a missing `default` binding says it serves the sources with no oracle.
+- `load` refuses a source that provides both `q:` and `t:` refs (check 4). Split it into two sources that name one oracle: ready in the same round, they are still one call.
+
 ## [0.0.1] - 2026-10-20
 
 ### Added

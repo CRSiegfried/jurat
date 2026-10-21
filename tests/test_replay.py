@@ -45,6 +45,7 @@ from jurat.helpers import HELPERS, pick_with_margin
 from scripted import Scripted, raising, returns
 from test_decide import (
     ASK,
+    BODY,
     GOLDEN_BROKEN,
     GOLDEN_RECORD,
     LOADED,
@@ -55,6 +56,7 @@ from test_decide import (
     Counting,
     Seen,
     archive_policy,
+    bound,
     caught,
     deciding,
     echo,
@@ -80,7 +82,7 @@ def findings(record: Record, loaded: LoadedDesign = LOADED) -> list[Any]:
 
 
 def live(loaded: LoadedDesign = LOADED, settings: Any = None, **replies: object) -> Record:
-    return go(loaded, binds={"default": Scripted({**REPLIES, **replies})}, settings=settings).record
+    return go(loaded, binds=bound(Scripted({**REPLIES, **replies})), settings=settings).record
 
 
 def edited(record: Record, change: Callable[[dict[str, Any]], object]) -> Record:
@@ -139,8 +141,8 @@ BLOBS = Source(
     }
 )
 LATE = Source({"t:late": t.string}, needs=["d:route"])
-CHAINED = slice_design(sources={"ask": ASK, "look": LOOK, "late": LATE})
-TYPED = slice_design(sources={"ask": ASK, "look": BLOBS})
+CHAINED = slice_design(sources={"ask": ASK, "body": BODY, "look": LOOK, "late": LATE})
+TYPED = slice_design(sources={"ask": ASK, "body": BODY, "look": BLOBS})
 SURE = {**SPAM, "q:spam": {"yes": 1, "no": 0}}
 
 SCENARIOS: dict[str, Callable[[], tuple[Record, LoadedDesign]]] = {
@@ -206,7 +208,7 @@ def test_a_bytes_and_a_number_reach_the_rules_typed_in_replay_as_live() -> None:
             "d:keep", t.string, keep, version="1", reads=["t:blob", "t:weight", "t:state.weight"]
         ),
     }
-    loaded = slice_design(sources={"ask": ASK, "look": BLOBS}, rules=rules)
+    loaded = slice_design(sources={"ask": ASK, "body": BODY, "look": BLOBS}, rules=rules)
     record = live(
         loaded, look=returns({"t:blob": b"\x01", "t:weight": 2, "t:size": 1, "t:maybe": 1})
     )
@@ -403,7 +405,9 @@ def test_an_added_source_is_not_in_record_and_its_refs_entry_findings() -> None:
     # Both ids sort after the kept sources, so the kept calls keep their indices.
     extra = Source({"t:extra": t.string})
     zed = Source({"t:zed": t.string})
-    changed = slice_design(sources={"ask": ASK, "look": LOOK, "zed": zed, "xtra": extra})
+    changed = slice_design(
+        sources={"ask": ASK, "body": BODY, "look": LOOK, "zed": zed, "xtra": extra}
+    )
     rerun, found = run(go().record, changed)
     assert rerun is not None
     assert found == [
@@ -436,9 +440,11 @@ def test_an_added_source_is_not_in_record_and_its_refs_entry_findings() -> None:
 
 
 def test_an_added_ref_is_ref_not_in_record_once_for_the_run() -> None:
-    ask = Source({**ASK.provides, "t:more": t.string, "t:also": t.string}, needs=ASK.needs, cost=1)
+    body = Source(
+        {**BODY.provides, "t:more": t.string, "t:also": t.string}, needs=BODY.needs, oracle="mail"
+    )
     look = Source({**LOOK.provides, "t:bigger": t.integer()}, needs=LOOK.needs)
-    changed = slice_design(sources={"ask": ask, "look": look})
+    changed = slice_design(sources={"ask": ASK, "body": body, "look": look})
     found = findings(go().record, changed)
     assert found[:2] == [
         {
@@ -452,9 +458,8 @@ def test_an_added_ref_is_ref_not_in_record_once_for_the_run() -> None:
 
 
 def test_a_ref_moved_to_another_source_finds_no_entry_under_that_sources_call() -> None:
-    ask = Source({"q:spam": ASK.provides["q:spam"]}, needs=ASK.needs, cost=1)
     look = Source({**LOOK.provides, "t:body": t.string}, needs=LOOK.needs)
-    changed = slice_design(sources={"ask": ask, "look": look})
+    changed = slice_design(sources={"ask": ASK, "look": look})
     found = findings(go().record, changed)
     assert found[1] == {"kind": K.ref_not_in_record, "refs": ["t:body"]}
     assert [f.get("ref") for f in found[2:]] == ["t:body"]
@@ -463,15 +468,15 @@ def test_a_ref_moved_to_another_source_finds_no_entry_under_that_sources_call() 
 def test_a_ref_asked_under_a_failed_call_with_no_entry_is_ref_not_in_record() -> None:
     record = live(look=raising(ValueError("down")))
     look = Source({**LOOK.provides, "t:bigger": t.integer()}, needs=LOOK.needs)
-    changed = slice_design(sources={"ask": ASK, "look": look})
+    changed = slice_design(sources={"ask": ASK, "body": BODY, "look": look})
     found = findings(record, changed)
     assert found[1] == {"kind": K.ref_not_in_record, "refs": ["t:bigger"]}
 
 
 def test_a_changed_wording_is_question_changed_and_still_answered() -> None:
     q = Question("noul", Text("Is it spam, really?"))
-    ask = Source({"q:spam": q, "t:body": t.string}, needs=ASK.needs, cost=1)
-    changed = slice_design(sources={"ask": ask, "look": LOOK})
+    ask = Source({"q:spam": q}, needs=ASK.needs, oracle="mail", cost=1)
+    changed = slice_design(sources={"ask": ask, "body": BODY, "look": LOOK})
     rerun, found = run(go().record, changed)
     assert found == [
         {
@@ -487,12 +492,12 @@ def test_a_changed_wording_is_question_changed_and_still_answered() -> None:
 
 def test_changed_labels_are_question_changed_and_the_answer_invalid() -> None:
     q = Question("choice", Text("Is it spam?"), labels=("ham", "spam"))
-    ask = Source({"q:spam": q, "t:body": t.string}, needs=ASK.needs, cost=1)
+    ask = Source({"q:spam": q}, needs=ASK.needs, oracle="mail", cost=1)
     rules = {
         **RULES,
         "route": Rule("d:route", t.label("no", "yes"), other_route, version="1", reads=["q:spam"]),
     }
-    changed = slice_design(sources={"ask": ask, "look": LOOK}, rules=rules)
+    changed = slice_design(sources={"ask": ask, "body": BODY, "look": LOOK}, rules=rules)
     rerun, found = run(go().record, changed)
     assert [f["kind"] for f in found[:2]] == [K.design_mismatch, K.question_changed]
     assert rerun is not None
@@ -505,8 +510,10 @@ def other_route(r: Any) -> Any:
 
 def test_every_kind_together_is_in_the_fixed_order() -> None:
     q = Question("noul", Text("Changed?"))
-    ask = Source({"q:spam": q, "t:body": t.string, "t:more": t.string}, needs=ASK.needs, cost=1)
-    changed = slice_design(sources={"ask": ask, "look": LOOK, "new": Source({"t:new": t.string})})
+    ask = Source({"q:spam": q}, needs=ASK.needs, oracle="mail", cost=1)
+    body = Source({**BODY.provides, "t:more": t.string}, needs=BODY.needs, oracle="mail")
+    sources = {"ask": ask, "body": body, "look": LOOK, "new": Source({"t:new": t.string})}
+    changed = slice_design(sources=sources)
     copy_ = edited(
         go().record,
         lambda d: (
@@ -563,7 +570,7 @@ def marked_state(doc: dict[str, Any]) -> None:
 
 def look_also_lists_ask(doc: dict[str, Any]) -> None:
     calls = [i for i in doc["log"] if i["item"] == "call"]
-    assert [c["sources"] for c in calls] == [["ask"], ["look"]]
+    assert [c["sources"] for c in calls] == [["ask", "body"], ["look"]]
     calls[1]["sources"] = ["ask", "look"]
 
 
@@ -711,9 +718,8 @@ def test_a_copy_clearing_a_refused_answer_replays_the_value() -> None:
 
 
 def test_a_dropped_t_ref_is_never_asked_so_it_is_no_ref_not_in_record() -> None:
-    ask = Source({"q:spam": ASK.provides["q:spam"]}, needs=ASK.needs, cost=1)
     echo = Rule("d:echo", t.string, RULES["echo"].function, version="1", reads=["t:state.subject"])
-    changed = slice_design(sources={"ask": ask, "look": LOOK}, rules={**RULES, "echo": echo})
+    changed = slice_design(sources={"ask": ASK, "look": LOOK}, rules={**RULES, "echo": echo})
     record = go().record
     found = findings(record, changed)
     assert K.ref_not_in_record not in [f["kind"] for f in found]
@@ -737,6 +743,7 @@ def test_a_when_reading_a_state_path_gates_its_source_and_replay_agrees() -> Non
 
     sources = {
         "ask": ASK,
+        "body": BODY,
         "look": LOOK,
         "mail": Source({"t:mail": t.string}, needs=["d:route"], when=When(to_dana, version="1")),
         "skip": Source({"t:skip": t.string}, when=When(to_nobody, version="1")),
@@ -799,7 +806,7 @@ def test_a_cut_holds_under_a_design_that_moves_a_source_past_it() -> None:
     assert cut_of(record) == [(1, True)]
     assert entry(record.log, "t:size")["value"] == 4  # look was asked in round 1
     moved = Source(LOOK.provides, needs=["t:state", "d:route"])
-    rerun, _ = run(record, slice_design(sources={"ask": ASK, "look": moved}))
+    rerun, _ = run(record, slice_design(sources={"ask": ASK, "body": BODY, "look": moved}))
     assert rerun is not None
     assert cut_of(rerun) == [(1, True)]
     assert all("look" not in i["sources"] for i in rerun.log if i["item"] == "call")
@@ -810,7 +817,7 @@ def test_a_cut_holds_under_a_design_that_moves_a_source_past_it() -> None:
 
 def test_a_recorded_budget_cut_replays_with_no_finding() -> None:
     late = Source({"t:late": t.string}, needs=["d:route"], cost=1)
-    costly = slice_design(sources={"ask": ASK, "look": LOOK, "late": late})
+    costly = slice_design(sources={"ask": ASK, "body": BODY, "look": LOOK, "late": late})
     record = live(costly, settings=RunSettings(budget=1.5))
     assert cut_of(record) == [(1, False), (2, False)]
     assert entry(record.log, "t:late")["marker"]["cause"]["code"] == "over-budget"
@@ -822,9 +829,10 @@ def test_a_changed_parameter_a_slot_reads_is_question_changed() -> None:
         q = Question(
             "noul", Text("Is it spam above {bar}?", [{"name": "bar", "origin": {"param": "bar"}}])
         )
-        ask = Source({"q:spam": q, "t:body": t.string}, needs=ASK.needs, cost=1)
+        ask = Source({"q:spam": q}, needs=ASK.needs, oracle="mail", cost=1)
         return slice_design(
-            sources={"ask": ask, "look": LOOK}, parameters={"bar": Parameter(t.number(), bar)}
+            sources={"ask": ask, "body": BODY, "look": LOOK},
+            parameters={"bar": Parameter(t.number(), bar)},
         )
 
     before = design(0.5)
@@ -874,8 +882,9 @@ SPAM_BAR = {
 }
 MAILED = slice_design(
     sources={
-        "ask": Source(ASK.provides, needs=ASK.needs, cost=1, batch="mail"),
-        "look": Source(LOOK.provides, needs=LOOK.needs, batch="mail"),
+        "ask": ASK,
+        "body": BODY,
+        "look": Source(LOOK.provides, needs=LOOK.needs, oracle="mail"),
     }
 )
 SLOTTED = slice_design(
@@ -893,11 +902,12 @@ SLOTTED = slice_design(
                         ],
                     ),
                 ),
-                "t:body": t.string,
             },
             needs=ASK.needs,
+            oracle="mail",
             cost=1,
         ),
+        "body": BODY,
         "look": LOOK,
     },
     parameters=SPAM_BAR,
@@ -905,6 +915,7 @@ SLOTTED = slice_design(
 GATED = slice_design(
     sources={
         "ask": ASK,
+        "body": BODY,
         "look": LOOK,
         "mail": Source({"t:mail": t.string}, needs=["t:state"], when=When(to_dana, version="1")),
         "skip": Source({"t:skip": t.string}, when=When(to_nobody, version="1")),
@@ -951,7 +962,7 @@ def calls_of(record: Record) -> list[list[str]]:
 
 
 FEATURES: dict[str, Callable[[], tuple[Record, LoadedDesign]]] = {
-    "a batch key with several sources": lambda: (mailed(), MAILED),
+    "an oracle with several sources": lambda: (mailed(), MAILED),
     "board and parameter wording slots": lambda: (live(SLOTTED), SLOTTED),
     "a function when and a source requirement, each true and false": lambda: (
         live(GATED, **GATED_REPLIES),
@@ -983,7 +994,7 @@ def test_a_round_trip_over_each_feature_has_no_finding(feature: str) -> None:
 
 
 def test_the_features_round_trips_exercise_what_they_name() -> None:
-    assert calls_of(mailed()) == [["ask", "look"]]
+    assert calls_of(mailed()) == [["ask", "body", "look"]]
     slotted = live(SLOTTED)
     assert entry(slotted.log, "q:spam")["round"] == 2  # the board slot is a need
     gated = live(GATED, **GATED_REPLIES)
@@ -1005,6 +1016,7 @@ def test_a_when_that_moves_a_source_to_another_round_still_finds_its_call() -> N
     before = slice_design(
         sources={
             "ask": ASK,
+            "body": BODY,
             "look": LOOK,
             "mail": Source(
                 {"t:mail": t.string}, needs=["t:state"], when=When(to_dana, version="1")
@@ -1014,6 +1026,7 @@ def test_a_when_that_moves_a_source_to_another_round_still_finds_its_call() -> N
     after = slice_design(
         sources={
             "ask": ASK,
+            "body": BODY,
             "look": LOOK,
             "mail": Source(
                 {"t:mail": t.string},
@@ -1061,7 +1074,8 @@ def test_a_regrouped_batch_is_answered_by_source_in_its_new_batch(
     loaded = designs[given]
     rerun, found = run(record, loaded)
     assert rerun is not None
-    assert calls_of(rerun) == ([["ask", "look"]] if given == "batched" else [["ask"], ["look"]])
+    split = [["ask", "body"], ["look"]]
+    assert calls_of(rerun) == ([["ask", "body", "look"]] if given == "batched" else split)
     # Every value is the recorded one; only the call index t:size names moved.
     assert answered(rerun) == answered(record)
     moved = (entry(record.log, "t:size")["call"], entry(rerun.log, "t:size")["call"])

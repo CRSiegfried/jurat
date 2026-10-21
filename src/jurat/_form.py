@@ -235,7 +235,7 @@ class _Form:
             needs=self.strings(s.needs, f"{where}'s needs", names),
             when=self.when(s.when, where, names, f"{sid}.when"),
             requirement=self.requirement(s.requirement, where, names),
-            batch=self.string(s.batch, f"{where}'s batch key", names),
+            oracle=self.string(s.oracle, f"{where}'s oracle name", names),
             timeout=timeout,
             payload=s.payload,
             cost=cost,

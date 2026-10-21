@@ -1,6 +1,6 @@
 """What an oracle binding call passes and returns.
 
-A binding is an async function the caller supplies, one per batch key and one under
+A binding is an async function the caller supplies, one per oracle name and one under
 ``default``. It takes the batch, a tuple of ``SourceCall``s in source id order, and returns a
 ``CallResult`` or a ``Failed`` outcome, or raises. Interpret is the one engine producer of a
 ``SourceCall`` and the one reader of a ``CallResult``. The three types are frozen and check
