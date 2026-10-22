@@ -46,6 +46,7 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["docs/tutorials/write_a_design"]
 addopts = ["--strict-markers", "--strict-config"]
 xfail_strict = true
 filterwarnings = ["error"]
@@ -61,7 +62,7 @@ fail_under = 90
 
 [tool.ruff]
 line-length = 100
-src = ["src", "tests"]
+src = ["src", "tests", "docs/tutorials/write_a_design"]
 
 [tool.ruff.lint]
 select = [
@@ -78,7 +79,8 @@ select = [
 ]
 
 [tool.pyright]
-include = ["src", "tests"]
+include = ["src", "tests", "docs/tutorials"]
+extraPaths = ["src", "docs/tutorials/write_a_design"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 

@@ -50,6 +50,18 @@ The binding returns, for the question's ref, exactly an object of `value`, `gues
 
 The binding may also report the refs whose response was cut short as `truncated`, which the record keeps outside every hash.
 
+## Decide
+
+A caller dispatches on `plan.kind`, never on the verdict alone: a `broken` plan has no steps, and the guard passes it with nothing to run.
+
+A cancellation of a running turn appends the `cause` item `cancelled`, closes the record, and propagates the `CancelledError` with the record as its `record`. To read `exc.record`, catch the `CancelledError` inside the task that awaits decide; a `CancelledError` that asyncio raises afresh carries no record. A cancellation requested from the observer takes effect at decide's next await. If the turn has none left, decide finishes, asyncio marks the finished task cancelled and raises a fresh `CancelledError`, and the decision is lost.
+
+## Replay
+
+`design-mismatch` gives the recorded and replayed design hashes. A function component's identity includes its module and qualified name, so the usual cause is a component whose module was `__main__`, a design defined in the script that ran it. To find the member that differs, keep the design document beside each record and diff it against `loaded.document` with any JSON diff; a design document is canonical JSON, so the output is stable. A design that must live in a script keeps its document and is loaded elsewhere with `load(document, functions={...})`, keyed by each function component's key, a rule's name, `<source>.when` or `policy`, which keeps its hash.
+
+`not-in-record` names a source the rerun asks that the record never called; `use_answers` reports the entries it would provide as `not-returned`. An `entry` finding compares the two entries whole, so it can differ in its derivation alone.
+
 ## Evaluation
 
 `jurat.evaluation.use_answers(record, loaded, other)` reruns `record`'s turn under `loaded` with `other`'s call items and entries answering, `q:` and `t:` refs alike; `use_answers_sync` is its twin. `record` and `other` are each a `Record` or a stored document, read through `read_record`. It returns `{"other": h, "findings": [...]}`, `h` the other record's hash. The state entry, the run settings, the cut and every comparison are `record`'s, so the findings are replay's with `other` as the fixture: `not-in-record` and `ref-not-in-record` name what `other` does not hold, and `question-changed` compares against `other`'s identities. A `Failed` call or a returned marker in `other` comes back as replay returns a recorded one. Neither record is edited, and neither's `unhashed` is read.
@@ -57,3 +69,7 @@ The binding may also report the refs whose response was cut short as `truncated`
 After both records are read and before any replay it raises `EvaluationRefusal`, `reason` in this order: `invalid-record` when a document does not read, carrying the `InvalidRecord` as `error`; `unfinished` for a record with no `verdict` item, then `nothing-to-replay` for one with no state entry, then `wrong-design` for one whose design hash is not `loaded.design_hash`, each for `record` then `other`; and `different-turn` when the two state entries or `settings` items differ by canonical bytes. `turn` is the refused record's hash, `other`'s for `different-turn`, and `None` for `invalid-record`, which carries `error` instead; every other attribute is `None`. A `loaded` that is not exactly a `LoadedDesign` is an `EntryRefusal`, before either record is read.
 
 A replay record, the `Record` that `replay` returns, is a valid `record` or `other`. To compare two models decided under different parameter sets, replay the second's record under the first's loaded design and pass the replay record as `other`; a threshold that makes the rerun ask a source the second never called shows as `not-in-record` in the replay's findings, and its entries come back `not-returned` in `use_answers`'s.
+
+## Continuing a workflow
+
+jurat has no resume within a turn. To continue a multi-step workflow, the caller runs the first steps itself, then decides a new turn whose state carries the steps' results and the prior turn's record hash, with those fields declared in the state type. The prior turn's hash is the caller's claim, and jurat does not check it. jurat does not record the steps' results except as the new turn's state. The new turn replays without the earlier one. `run_plan`'s idempotency keys follow the new turn's record. `run_plan` has no option to stop after a step, so the first steps run on the caller's own runner.
