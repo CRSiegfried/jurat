@@ -17,11 +17,17 @@ from jurat import (
     FindingKind,
     InvalidRecord,
     LoadedDesign,
+    Parameter,
     Record,
     Requirement,
+    Rule,
     RunSettings,
+    Source,
+    SourceRequirement,
     read_record,
+    replay_sync,
 )
+from jurat import types as t
 from jurat.evaluation import (
     EvaluationRefusal,
     RefusalReason,
@@ -31,8 +37,12 @@ from jurat.evaluation import (
 )
 from scripted import Scripted, returns, unsupported
 from test_decide import (
+    ASK,
+    BODY,
     LOADED,
+    LOOK,
     REPLIES,
+    RULES,
     SPAM,
     STATE,
     Seen,
@@ -43,7 +53,15 @@ from test_decide import (
     record_of,
     slice_design,
 )
-from test_replay import CHAINED, Slowly, edited, entry, rule_of
+from test_replay import (
+    CHAINED,
+    SPAM_BAR,
+    Slowly,
+    bounded_route,
+    edited,
+    entry,
+    rule_of,
+)
 
 K = FindingKind
 R = RefusalReason
@@ -209,6 +227,91 @@ def test_a_source_other_never_called_is_not_in_record() -> None:
     assert K.ref_not_in_record not in [f["kind"] for f in result]
     late = next(f for f in result if f.get("ref") == "t:late")
     assert late["replayed"]["marker"]["cause"]["code"] == "not-returned"
+
+
+# ---------------------------------------------------------------------------------------------
+# Two parameter sets: the second record replayed under the first's design
+
+
+def thresholded(bar: float, *, held: bool = False) -> LoadedDesign:
+    """The slice design with ``route`` deciding at ``bar``; with ``held``, a source asked only
+    when ``d:route`` is ``yes``."""
+    sources = {"ask": ASK, "body": BODY, "look": LOOK}
+    if held:
+        gate = SourceRequirement("d:route", ["yes"])
+        sources["held"] = Source({"t:held": t.string}, requirement=gate)
+    rule = Rule(
+        "d:route",
+        t.label("no", "yes"),
+        bounded_route,
+        version="1",
+        reads=["q:spam"],
+        params=["spam/bar", "spam/margin"],
+    )
+    return slice_design(
+        sources=sources,
+        rules={**RULES, "route": rule},
+        parameters={**SPAM_BAR, "spam/bar": Parameter(t.number(0, 1), bar)},
+    )
+
+
+FIRST, SECOND = thresholded(0.5), thresholded(0.95)
+
+
+def model_pair() -> tuple[Record, Record]:
+    """The first model's record under its thresholds, and the second's replayed under them."""
+    rerun, _ = replay_sync(live(SECOND, ask=returns(HAM)), FIRST)
+    assert rerun is not None
+    assert rerun.log[0]["hash"] == FIRST.design_hash
+    return live(FIRST), rerun
+
+
+@pytest.mark.usefixtures("no_replay")
+def test_two_records_differing_only_in_a_parameter_leaf_are_wrong_design() -> None:
+    assert FIRST.design_hash != SECOND.design_hash
+    theirs = live(SECOND, ask=returns(HAM))
+    exc = refusal(live(FIRST), theirs, FIRST)
+    assert exc.reason is R.wrong_design
+    assert exc.turn == theirs.record_hash
+
+
+def test_a_replay_record_under_the_first_design_is_a_valid_other() -> None:
+    record, rerun = model_pair()
+    result = found(record, rerun, FIRST)
+    assert result == diff(record, rerun, FIRST)
+    assert [(f["kind"], f.get("ref")) for f in result] == [
+        (K.entry, "d:route"),
+        (K.entry, "q:spam"),
+        (K.plan, None),
+    ]
+    assert result[1]["replayed"] == entry(rerun.log, "q:spam")
+    assert (result[0]["recorded"]["value"], result[0]["replayed"]["value"]) == ("yes", "no")
+
+
+def test_a_replay_record_is_a_valid_record_with_the_original_as_other() -> None:
+    record, rerun = model_pair()
+    result = found(rerun, record, FIRST)
+    assert result == diff(rerun, record, FIRST)
+    assert [(f["kind"], f.get("ref")) for f in result] == [
+        (K.entry, "d:route"),
+        (K.entry, "q:spam"),
+        (K.plan, None),
+    ]
+
+
+def test_a_source_the_seconds_thresholds_skipped_shows_in_the_replay_and_the_diff() -> None:
+    first, second = thresholded(0.5, held=True), thresholded(0.95, held=True)
+    theirs = live(second)
+    assert entry(theirs.log, "t:held")["marker"]["kind"] == "Unasked"
+    rerun, findings = replay_sync(theirs, first)
+    assert rerun is not None
+    assert {"kind": K.not_in_record, "sources": ["held"]} in findings
+    result = found(live(first, held=returns({"t:held": "h"})), rerun, first)
+    assert [f.get("ref") for f in result] == ["t:held"]
+    assert result[0]["replayed"]["marker"]["cause"] == {
+        "code": "not-returned",
+        "refs": ["t:held"],
+    }
 
 
 # ---------------------------------------------------------------------------------------------
