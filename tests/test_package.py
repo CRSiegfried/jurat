@@ -65,6 +65,7 @@ PUBLIC = {
     "Step",
     "Origin",
     "Binding",
+    "ReadView",
     "Verdict",
     "GuardFailure",
     "RunSettings",
@@ -105,3 +106,10 @@ def test_jurat_types_exports_exactly_the_constructors() -> None:
 
     assert set(jurat.types.__all__) == TYPE_CONSTRUCTORS
     assert {n for n in vars(jurat.types) if not n.startswith("_")} == TYPE_CONSTRUCTORS
+
+
+def test_plain_literals_and_lambdas_build_the_public_types() -> None:
+    import typing_strict
+
+    assert typing_strict.step.arguments == typing_strict.args
+    assert typing_strict.source.needs == ("t:state",)

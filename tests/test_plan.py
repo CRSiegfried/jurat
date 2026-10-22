@@ -7,7 +7,8 @@ import copy
 import dataclasses
 import enum
 import pickle
-from collections.abc import Callable
+from collections.abc import Callable, ItemsView, Iterator, Mapping
+from types import MappingProxyType
 from typing import Any, cast
 
 import pytest
@@ -183,10 +184,87 @@ def test_a_step_field_of_the_wrong_type_is_a_type_error(args: tuple[Any, ...]) -
         Step(*args)
 
 
-def test_a_mapping_that_is_not_a_dict_is_a_type_error() -> None:
-    step = Step("t", {"a": Origin(literal=1)})
-    with pytest.raises(TypeError, match="not a dict"):
-        Step("t", cast(Any, step.arguments))
+def test_a_list_of_pairs_is_not_a_mapping() -> None:
+    with pytest.raises(TypeError, match="not a mapping"):
+        Step("t", cast(Any, [("a", Origin(literal=1))]))
+
+
+class Arguments(Mapping[str, Origin | Binding]):
+    """A caller's own mapping of arguments."""
+
+    def __init__(self, pairs: dict[str, Origin | Binding]) -> None:
+        self.pairs = pairs
+
+    def __getitem__(self, name: str) -> Origin | Binding:
+        return self.pairs[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.pairs)
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+
+class Raising(Arguments):
+    def items(self) -> ItemsView[str, Origin | Binding]:
+        raise LookupError("no items")
+
+
+def test_a_steps_arguments_are_any_mapping_copied_read_only() -> None:
+    pairs: dict[str, Origin | Binding] = {"a": Origin(literal=1), "b": Binding(1)}
+    other = Step("u", pairs)
+    for given in (MappingProxyType(pairs), Arguments(pairs), other.arguments):
+        step = Step("t", given)
+        assert dict(step.arguments) == pairs
+        assert step.arguments is not given
+        with pytest.raises(TypeError):
+            step.arguments["c"] = Origin(literal=3)  # type: ignore[index]
+    given = Arguments(dict(pairs))
+    step = Step("t", given)
+    given.pairs["c"] = Origin(literal=3)
+    assert list(step.arguments) == ["a", "b"]
+
+
+class Pairs(Arguments):
+    """A mapping whose ``items()`` yields what it was given."""
+
+    def __init__(self, items: list[Any]) -> None:
+        super().__init__({})
+        self.given = items
+
+    def items(self) -> ItemsView[str, Origin | Binding]:
+        return cast(Any, self.given)
+
+
+@pytest.mark.parametrize(
+    "item", [1, ("a",), ("a", Origin(literal=1), 2), ["a", Origin(literal=1)], "ab"]
+)
+def test_an_item_that_is_not_a_pair_is_a_type_error(item: Any) -> None:
+    with pytest.raises(TypeError, match="is not a name and an origin"):
+        Step("t", Pairs([item]))
+
+
+class ItemsOnly(Arguments):
+    """A mapping read only through ``items()``."""
+
+    def __getitem__(self, name: str) -> Origin | Binding:
+        raise AssertionError("read by key")
+
+    def __iter__(self) -> Iterator[str]:
+        raise AssertionError("iterated")
+
+    def items(self) -> ItemsView[str, Origin | Binding]:
+        return cast(Any, list(self.pairs.items()))
+
+
+def test_a_steps_arguments_are_read_once_through_items() -> None:
+    step = Step("t", ItemsOnly({"a": Origin(literal=1)}))
+    assert list(step.arguments) == ["a"]
+
+
+def test_a_raise_from_the_arguments_items_propagates() -> None:
+    with pytest.raises(LookupError, match="no items"):
+        Step("t", Raising({}))
 
 
 class Twin(str):

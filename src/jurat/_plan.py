@@ -168,6 +168,9 @@ class _TwinnedValues(ValuesView["Origin | Binding"]):
         return any(origin is value for origin in self)
 
 
+_NO_ARGUMENTS: Mapping[str, Origin | Binding] = MappingProxyType({})
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class Step:
     """One tool call: the declared tool name, the arguments by name, each an ``Origin`` or a
@@ -183,16 +186,21 @@ class Step:
     def __init__(
         self,
         tool: str,
-        arguments: dict[str, Origin | Binding] = {},  # noqa: B006 - read, never kept
+        arguments: Mapping[str, Origin | Binding] = _NO_ARGUMENTS,
         requirements: list[Requirement] | tuple[Requirement, ...] = (),
     ) -> None:
         if not issubclass(type(tool), str):  # pyright: ignore[reportUnnecessaryIsInstance]
             raise TypeError(f"a step's tool {described(tool)} is not a string")
-        if type(arguments) is not dict:
-            raise TypeError(f"a step's arguments {described(arguments)} are not a dict")
+        if not issubclass(type(arguments), Mapping):  # pyright: ignore[reportUnnecessaryIsInstance]
+            raise TypeError(f"a step's arguments {described(arguments)} are not a mapping")
         pairs: list[tuple[str, Origin | Binding]] = []
-        given = cast("dict[object, object]", arguments)  # exactly a dict, so no override
-        for name, origin in given.items():
+        given = list(cast("Mapping[object, object]", arguments).items())  # read once
+        for pair in cast("list[object]", given):
+            # Exactly a tuple of two, so unpacking runs no caller code.
+            if type(pair) is not tuple or len(cast("tuple[object, ...]", pair)) != 2:
+                shown = described(cast(object, pair))
+                raise TypeError(f"a step's argument {shown} is not a name and an origin")
+            name, origin = cast("tuple[object, object]", pair)
             if not issubclass(type(name), str):
                 raise TypeError(f"a step's argument name {described(name)} is not a string")
             if type(origin) is not Origin and type(origin) is not Binding:
@@ -203,7 +211,7 @@ class Step:
         named = {string_data(name): origin for name, origin in pairs}
         arguments_: Mapping[str, Origin | Binding] = MappingProxyType(named)
         if len(named) != len(pairs):
-            # Two names a dict keeps apart by an override share one string data: kept as
+            # Two names the mapping keeps apart by an override share one string data: kept as
             # given, so plan rule 7 finds the arguments outside the domain.
             arguments_ = _Twinned(pairs)
         members = _members(requirements, "a step's requirements")

@@ -2,6 +2,7 @@
 """Loading a design document: the round trip, check 11's gate, resolving
 each function component through ``functions`` and ``importlib``, and the comparison."""
 
+import dataclasses
 import functools
 import json
 import sys
@@ -14,7 +15,7 @@ import pytest
 import designs
 from counting import SmallBounds, bound, counted
 from designs import bounded, full, gated, minimal, question, rule, with_rule, with_source
-from jurat import Design, DesignFailure, InvalidDesign, LoadedDesign, Source, load
+from jurat import Design, DesignFailure, InvalidDesign, LoadedDesign, Source, When, load
 from jurat import types as t
 from jurat._canonical import decode, encode, sha256_ref
 
@@ -135,6 +136,23 @@ def test_a_function_in_locals_or_a_lambda_loads_through_functions() -> None:
     for fn in (inner, anonymous):
         document = load(with_rule(minimal(), "r", rule("r", function=fn))).document
         load(document, functions={"r": fn})
+
+
+def test_a_lambda_when_loads_through_functions_to_the_same_hash() -> None:
+    def gate(design: Design) -> Design:
+        source = design.sources["gate"]
+        when = When(lambda r: r.read("t:lookup") == "x", version="w1")
+        return with_source(design, "gate", dataclasses.replace(source, when=when))
+
+    loaded = load(gate(gated()))
+    fn = loaded._callables["gate.when"]
+    again = load(loaded.document, functions={"gate.when": fn})
+    assert again.design_hash == loaded.design_hash
+    assert again._callables["gate.when"] is fn
+    (failure,) = only(loaded.document, 11)
+    assert failure.names == ("gate",)
+    assert 'source "gate"\'s when' in failure.message
+    assert "must be in functions" in failure.message
 
 
 def test_a_function_whose_source_cannot_be_read_round_trips() -> None:

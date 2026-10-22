@@ -11,7 +11,8 @@ import enum
 import gc
 import inspect
 import warnings
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, ItemsView, Iterator, Mapping, Sequence
+from types import MappingProxyType
 from typing import Any, cast
 
 import pytest
@@ -793,6 +794,37 @@ def test_a_policy_that_raises_is_broken_raised_with_its_text_kept() -> None:
     assert cause_of(record) == broken("raised", "policy")
     assert returned.cause == Cause(CauseCode.raised, ["policy"])
     assert record.unhashed["exceptions"][plan_index(record)]["type"] == "KeyError"
+
+
+class _RaisingArguments(Mapping[str, Origin | Binding]):
+    def __getitem__(self, name: str) -> Origin | Binding:
+        raise KeyError(name)
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(())
+
+    def __len__(self) -> int:
+        return 0
+
+    def items(self) -> ItemsView[str, Origin | Binding]:
+        raise LookupError("no items")
+
+
+def test_a_step_whose_arguments_raise_in_the_policy_is_broken_raised() -> None:
+    record, returned, _ = run(lambda r: execute(Step("archive", _RaisingArguments())))
+    assert cause_of(record) == broken("raised", "policy")
+    assert returned.kind is PlanKind.broken
+    assert returned.cause == Cause(CauseCode.raised, ["policy"])
+
+
+def test_a_steps_arguments_from_any_mapping_record_the_same_plan_item() -> None:
+    step = GOOD.steps[0]
+    args = dict(step.arguments)
+    first, _, _ = returning(execute(Step(step.tool, args, step.requirements)))
+    assert cause_of(first) is None
+    for given in (MappingProxyType(args), step.arguments):
+        record, _, _ = returning(execute(Step(step.tool, given, step.requirements)))
+        assert encode(plan_item(record)) == encode(plan_item(first))
 
 
 @pytest.mark.parametrize("exc", [KeyboardInterrupt(), SystemExit(1), asyncio.CancelledError()])

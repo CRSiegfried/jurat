@@ -509,11 +509,13 @@ class _Loader:
         for rid, rule in self.rules():
             parsed = _declared(rule.provides)
             if parsed is not None and rule.provides != f"d:{rid}":
-                self.fail(
-                    4,
-                    (rid, rule.provides),
-                    f"rule {_q(rid)} provides {_q(rule.provides)}; a rule provides its own d: ref",
+                message = (
+                    f"rule {_q(rid)} provides {_q(rule.provides)}; "
+                    f"a rule provides its own d: ref, {_q(f'd:{rid}')}"
                 )
+                if parsed.level == "d":
+                    message += f", and {_q(rule.provides)} would be rule {_q(parsed.name)}'s"
+                self.fail(4, (rid, rule.provides), message)
         allowed = {
             "slot": ("d", "t"),
             "text": ("d", "t"),

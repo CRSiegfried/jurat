@@ -599,6 +599,29 @@ def test_check_4(design: Design) -> None:
     only(design, 4)
 
 
+@pytest.mark.parametrize(
+    ("rid", "provides", "says"),
+    [
+        (
+            "gate",
+            "d:email/gate",
+            'rule "gate" provides "d:email/gate"; a rule provides its own d: ref, "d:gate", '
+            'and "d:email/gate" would be rule "email/gate"\'s',
+        ),
+        (
+            "r",
+            "d:other",
+            'rule "r" provides "d:other"; a rule provides its own d: ref, "d:r", '
+            'and "d:other" would be rule "other"\'s',
+        ),
+        ("r", "t:x", 'rule "r" provides "t:x"; a rule provides its own d: ref, "d:r"'),
+    ],
+)
+def test_check_4_a_rule_provides_its_own_d_ref(rid: str, provides: str, says: str) -> None:
+    (failure,) = only(with_rule(minimal(), rid, rule(rid, provides=provides)), 4)
+    assert (set(failure.names), failure.message) == ({rid, provides}, says)
+
+
 def test_check_4_a_source_provides_refs_of_one_level() -> None:
     mixed = Source({"q:x": question(), "t:y": t.string})
     (failure,) = only(with_source(minimal(), "s", mixed), 4)
@@ -1015,7 +1038,7 @@ def test_a_function_without_a_qualified_name_fails_check_10() -> None:
     class NoName:
         __module__ = "m"
 
-        def __call__(self) -> None: ...
+        def __call__(self, r: object) -> None: ...
 
     only(minimal(policy=Policy(NoName(), version="1")), 10)
 
@@ -1532,10 +1555,10 @@ def test_a_whens_version_changes_the_hash() -> None:
 
 
 def test_a_when_whose_source_cannot_be_read_has_a_null_source() -> None:
-    doc = decode(load(gate(when=When(len, version="1"))).document)
+    doc = decode(load(gate(when=When(repr, version="1"))).document)
     assert doc["sources"]["s"]["when"] == {
         "module": "builtins",
-        "qualname": "len",
+        "qualname": "repr",
         "version": "1",
         "source": None,
     }

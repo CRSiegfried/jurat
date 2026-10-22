@@ -18,6 +18,7 @@ from typing import Any, Literal, cast
 
 from jurat._answer import AnswerKind, ValueType
 from jurat._canonical import decode
+from jurat._read_view import ReadView
 from jurat._types import ListOf, MappingOf, Scalar, Type, b64url_decode, b64url_encode
 from jurat._values import string_data
 
@@ -169,7 +170,7 @@ def _origin(value: object) -> Any:
 class When:
     """A source's function ``when``: the callable and its ``version``."""
 
-    function: Callable[..., Any]
+    function: Callable[[ReadView], object]
     version: str | None = None
 
     def __post_init__(self) -> None:
@@ -257,7 +258,7 @@ class Rule:
 
     provides: str
     outputs: str
-    function: Callable[..., Any]
+    function: Callable[[ReadView], object]
     version: str | None = None
     reads: Sequence[str] = ()
     params: Sequence[str] = ()
@@ -301,7 +302,7 @@ class Table:
 class Policy:
     """A function policy: it reads ``reads`` and ``params`` and returns a plan."""
 
-    function: Callable[..., Any]
+    function: Callable[[ReadView], object]
     version: str | None = None
     reads: Sequence[str] = ()
     params: Sequence[str] = ()

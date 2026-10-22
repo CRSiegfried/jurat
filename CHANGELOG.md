@@ -4,6 +4,15 @@ All notable changes to jurat are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+
+- `ReadView`, the view a function `when`, rule or policy is called with, is public, so a component can be annotated with it. `When`, `Rule` and `Policy` type `function` as `Callable[[ReadView], object]`, so a lambda passes pyright strict.
+
+### Changed
+
+- `Step` takes its arguments as any `Mapping`, read once through `items()`, and still keeps a read-only copy; a non-mapping is a `TypeError`. The recorded plan is unchanged.
+- Check 4's message for a rule that provides another ref names the rule's own `d:` ref, and for another rule's `d:` ref, whose it would be.
+
 ## [0.2.0] - 2026-10-22
 
 ### Added
