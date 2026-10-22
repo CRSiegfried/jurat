@@ -206,7 +206,8 @@ answers, so no model is needed.
 
    `load` raises `InvalidDesign` naming every failure. Without `"reader"`, `decide_sync`
    raises `EntryRefusal`. A real binding, such as one over a model provider's API, plugs
-   in at the same place, in this mapping.
+   in at the same place, in this mapping. So does `jurat.from_record(record, loaded)`,
+   which answers an oracle's sources from a stored record while the others run live.
 
 4. Run the driver from its directory:
 
