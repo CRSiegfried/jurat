@@ -29,7 +29,7 @@ deepest member."""
 MAX_DOCUMENT_DEPTH = 128
 """The deepest a document the encoder writes or a reader parses nests."""
 
-FORMAT = 2
+FORMAT = 3
 """The format number this engine writes into a record and a design document. It reads every
 format from 1 up to it, each under that format's rules."""
 
@@ -38,6 +38,21 @@ FORMATS = frozenset(range(1, FORMAT + 1))
 
 EXTRACTION_FORMAT = 2
 """The first format with the extraction answer kind and a call's ``truncated``."""
+
+DESCRIPTION_FORMAT = 3
+"""The first format whose ``choice`` and ``score`` labels may each carry a description."""
+
+WARNINGS_FORMAT = 3
+"""The first format with a call's ``warnings``."""
+
+PRECISION_FORMAT = 3
+"""The first format whose call item holds the call's ``precision``."""
+
+UNSUPPORTED_FORMAT = 3
+"""The first format with the ``unsupported`` cause code."""
+
+HASH_FORMAT = 3
+"""The first format whose record document holds the record hash as its ``hash`` member."""
 
 
 def string_data(value: str) -> str:

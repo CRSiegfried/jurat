@@ -20,7 +20,18 @@ import warnings
 from collections.abc import Awaitable, Callable, Generator, Mapping
 from typing import Any, cast
 
-from jurat import CallResult, LoadedDesign, Plan, Record, SourceCall, Verdict, read_record
+from jurat import (
+    CallResult,
+    Cause,
+    CauseCode,
+    LoadedDesign,
+    Plan,
+    Record,
+    SourceCall,
+    Unavailable,
+    Verdict,
+    read_record,
+)
 from jurat._compile import compile_turn
 from jurat._interpret import interpret
 from jurat._ledger import Ledger, Observer
@@ -49,6 +60,18 @@ class Scripted:
 
 def returns(values: dict[str, Any], **provenance: Any) -> CallResult:
     return CallResult(values, **provenance)
+
+
+def unsupported(reason: str | None = "this provider takes no such question") -> Reply:
+    """A binding's refusal before any call: every ref of the batch ``Unavailable`` with
+    ``unsupported``, the reason a line of the call's ``warnings``."""
+
+    async def reply(batch: Batch) -> object:
+        marker = Unavailable(Cause(CauseCode.unsupported))
+        refs = [ref for call in batch for ref in (*call.refs, *call.questions)]
+        return CallResult(dict.fromkeys(refs, marker), warnings=() if reason is None else (reason,))
+
+    return reply
 
 
 def raising(exc: BaseException) -> Reply:

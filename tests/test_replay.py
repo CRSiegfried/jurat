@@ -42,6 +42,7 @@ from jurat import (
 from jurat import types as t
 from jurat._canonical import decode
 from jurat.helpers import HELPERS, pick_with_margin
+from ledger_logs import rehashed
 from scripted import Scripted, raising, returns
 from test_decide import (
     ASK,
@@ -88,7 +89,7 @@ def live(loaded: LoadedDesign = LOADED, settings: Any = None, **replies: object)
 def edited(record: Record, change: Callable[[dict[str, Any]], object]) -> Record:
     doc = json.loads(record.document)
     change(doc)
-    return read_record(doc)
+    return read_record(rehashed(doc))
 
 
 def entry(log: list[dict[str, Any]], ref: str) -> dict[str, Any]:
@@ -1094,3 +1095,18 @@ def test_a_regrouped_batch_is_answered_by_source_in_its_new_batch(
             "rule": None,
         },
     ]
+
+
+def test_a_format_2_record_whose_question_is_now_described_is_mismatch_and_changed() -> None:
+    import test_format_3 as f3
+
+    undescribed = load(f3.described(f3.tone_question(["warm", "cold"])))
+    doc = json.loads(f3.ran(loaded=undescribed).document)
+    del doc["hash"]
+    doc["log"][0]["format"] = 2  # as a format-2 engine wrote it
+    for item in doc["log"]:
+        if item["item"] == "call":
+            del item["precision"]
+    _, found = run(read_record(doc), load(f3.described()))
+    assert [f["kind"] for f in found] == [FindingKind.design_mismatch, FindingKind.question_changed]
+    assert found[1]["refs"] == ["q:tone"]

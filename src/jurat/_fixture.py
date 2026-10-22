@@ -6,8 +6,8 @@ Built once from a record's log and the given loaded design. Each asked source is
 the recorded call item that lists it, never by round or batch, and each of its refs is
 answered only from a recorded entry naming that call. No answer
 depends on an earlier call; it waits for nothing and returns fresh containers with null
-provenance. It logs the refs each source was asked, which replay reads for
-``ref-not-in-record``.
+provenance, a null precision and no truncated refs or warnings. It logs the refs each source
+was asked, which replay reads for ``ref-not-in-record``.
 """
 
 from collections.abc import Mapping
@@ -20,7 +20,9 @@ from jurat._markers import Cause, CauseCode, Failed, Unavailable
 from jurat._typed import decoded
 
 _C = CauseCode
-_RETURNED_MARKERS = frozenset({_C.refused.value, _C.invalid_answer.value, _C.invalid_return.value})
+_RETURNED_MARKERS = frozenset(
+    {_C.refused.value, _C.invalid_answer.value, _C.invalid_return.value, _C.unsupported.value}
+)
 _NO_KEY = object()
 """What a ref gets that the fixture leaves out of ``values``; a recorded null is a value."""
 
@@ -79,7 +81,7 @@ class FixtureBinding:
 
     def _answer(self, ref: str, entry: Mapping[str, Any]) -> object:
         """The recorded entry's value, typed, a ``q:`` value in the binding's form of its
-        recorded kind, or one of the three markers a binding may return; ``_NO_KEY`` for any
+        recorded kind, or one of the four markers a binding may return; ``_NO_KEY`` for any
         other marker."""
         if "value" in entry:
             value = entry["value"]

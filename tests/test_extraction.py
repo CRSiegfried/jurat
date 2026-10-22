@@ -260,7 +260,7 @@ def only(design: Any, check: int, says: str) -> None:
 def test_a_valid_extraction_design_loads_and_writes_the_questions_object() -> None:
     loaded = x.loaded()
     provides = decode(loaded.document)["sources"]["read"]["provides"]
-    assert decode(loaded.document)["format"] == 2
+    assert decode(loaded.document)["format"] == 3
     assert provides["q:amount"] == {
         "kind": "extraction",
         "wording": {

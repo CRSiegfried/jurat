@@ -60,7 +60,6 @@ from jurat._values import (
 from jurat.helpers._numbers import exact
 
 _STATE = "t:state"
-_NOUL = ("yes", "no")
 _ZERO, _ONE = Fraction(0), Fraction(1)
 
 
@@ -138,11 +137,9 @@ def question(loaded: LoadedDesign, ref: str) -> Question:
     return cast(Question, provided)
 
 
-def labels_of(q: Question) -> tuple[str, ...]:
-    """A question's labels in declared order: ``yes`` and ``no`` for ``noul``."""
-    if q.kind is AnswerKind.noul:
-        return _NOUL
-    return cast("tuple[str, ...]", q.labels)
+def labels_of(loaded: LoadedDesign, ref: str) -> tuple[str, ...]:
+    """A question's label names in declared order: ``yes`` and ``no`` for ``noul``."""
+    return loaded._labels[ref][0]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -316,7 +313,7 @@ class _Filler:
 
     def answers(self, ref: str, q: Question) -> list[Point]:
         """A ``q:`` read's answer points, before its marker."""
-        labels = labels_of(q)
+        labels = labels_of(self.loaded, ref)
         entry = cast("Mapping[str, Any] | None", self.loaded._grid.get(ref))
         if entry is not None:
             if len(labels) == 1:  # one distribution, so one answer point

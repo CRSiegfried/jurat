@@ -265,6 +265,7 @@ def test_one_working_round_is_round_1_with_its_call_entries_rules_and_round_item
             "snapshot": None,
             "elicitation": None,
             "prompt": None,
+            "precision": None,
             "questions": questions,
         },
         {
@@ -344,10 +345,10 @@ def test_a_call_passes_each_source_call_with_its_payload_needs_refs_and_question
     assert (told.id, told.payload, told.needs) == ("body", None, {"t:state.subject": "hello"})
     assert (told.refs, told.questions) == (("t:body",), {})
     assert call.questions["q:spam"] == RenderedQuestion(
-        AnswerKind.noul, "Is it spam?", ("yes", "no")
+        AnswerKind.noul, "Is it spam?", ("yes", "no"), descriptions=(None, None)
     )
     assert call.questions["q:tone"] == RenderedQuestion(
-        AnswerKind.choice, "Which tone?", ("warm", "cold")
+        AnswerKind.choice, "Which tone?", ("warm", "cold"), descriptions=(None, None)
     )
 
 
@@ -1794,7 +1795,7 @@ def test_a_score_question_is_passed_its_levels_and_recorded_with_them() -> None:
     probabilities = {"low": 0.25, "mid": 0.25, "high": 0.5}
     record, binding = run(make({"s": source}), {"s": returns({"q:urgency": probabilities})})
     assert binding.batches[0][0].questions["q:urgency"] == RenderedQuestion(
-        AnswerKind.score, "How urgent?", levels
+        AnswerKind.score, "How urgent?", levels, descriptions=(None,) * len(levels)
     )
     assert record.log[3]["questions"]["q:urgency"] == {
         "identity": identity("How urgent?", "score", list(levels)),

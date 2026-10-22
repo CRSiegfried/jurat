@@ -38,6 +38,7 @@ class CauseCode(enum.StrEnum):
     cancelled = "cancelled"
     carried = "carried"  # no v0.0.1 producer
     abstained = "abstained"
+    unsupported = "unsupported"
 
 
 class PlanKind(enum.StrEnum):

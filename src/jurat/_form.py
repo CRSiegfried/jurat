@@ -54,11 +54,13 @@ _CLASSES = frozenset({"open", "identifier", "content"})
 MAX_LABELS = 2**18
 """The most labels a question declares; read at each check, so a test may set it smaller."""
 MAX_LABEL_CODE_POINTS = 2**24
-"""The most code points a question's labels hold in all."""
+"""The most code points a question's label names and descriptions hold in all."""
 _Q_ROLES = frozenset({"bar", "thresholds", "margin", "mass"})
 _X_ROLES = frozenset({"null", "confidence", "value"})
 X_ROLES = ("null", "confidence", "value")
 """An extraction read's ``boundaries`` roles."""
+_BARE = object()
+"""A bare label's description: it declares none."""
 _HITS = frozenset({"U", "A", "P", "F", "C+", "C<", "C>", "C#"})
 
 
@@ -398,31 +400,57 @@ class _Form:
     def labels(
         self, value: object, where: str, names: tuple[str, ...], least: int
     ) -> tuple[str, ...] | None:
-        """Distinct strings, at least ``least`` of them, at most ``MAX_LABELS`` holding at most
-        ``MAX_LABEL_CODE_POINTS`` code points in all, counted before any is read, so every
-        answer to the question is within the value domain's size bounds."""
+        """Labels, at least ``least`` of them, each a name, a string, or exactly an object of
+        ``name`` and ``description``, both strings, the description holding a character that is
+        not whitespace; the names distinct. At most ``MAX_LABELS`` labels, their names and
+        descriptions holding at most ``MAX_LABEL_CODE_POINTS`` code points in all, counted
+        before any is read, so every answer to the question and every call item asking it is
+        within the value domain's size bounds. The names in order, or ``None`` after a
+        failure."""
         if isinstance(value, str | bytes | bytearray) or not isinstance(value, Sequence):
-            self.fail(names, f"{where} are not a list of strings")
+            self.fail(names, f"{where} are not a list of labels")
             return None
         members = cast("Sequence[object]", value)
         if len(members) > MAX_LABELS:
             self.fail(names, f"{where} number more than {power(MAX_LABELS)}")
             return None
-        if not all(isinstance(m, str) for m in members):
-            self.fail(names, f"{where} are not a list of strings")
+        parts: list[tuple[object, object]] = []
+        for member in members:
+            if isinstance(member, str):
+                parts.append((member, _BARE))
+            elif isinstance(member, Mapping):
+                described = cast("Mapping[object, object]", member)
+                if set(described) != {"name", "description"}:
+                    self.fail(
+                        names,
+                        f"{where} hold an object that is not exactly a name and a description",
+                    )
+                    return None
+                parts.append((described["name"], described["description"]))
+            else:
+                self.fail(names, f"{where} hold a label that is neither a string nor an object")
+                return None
+        if not all(isinstance(n, str) and isinstance(d, str) for n, d in parts if d is not _BARE):
+            self.fail(names, f"{where} hold a label whose name or description is not a string")
             return None
-        if sum(str.__len__(cast(str, m)) for m in members) > MAX_LABEL_CODE_POINTS:
+        strings = [cast(str, s) for pair in parts for s in pair if s is not _BARE]
+        if sum(str.__len__(s) for s in strings) > MAX_LABEL_CODE_POINTS:
             self.fail(names, f"{where} hold more than {power(MAX_LABEL_CODE_POINTS)} code points")
             return None
-        if not all(is_scalar_string(m) for m in members):
-            self.fail(names, f"{where} are not a list of strings")
+        if not all(is_scalar_string(s) for s in strings):
+            self.fail(names, f"{where} hold a string that is not of Unicode scalar values")
             return None
-        data = [string_data(cast(str, m)) for m in members]
+        data = [string_data(cast(str, n)) for n, _ in parts]
         if len(data) < least:
             self.fail(names, f"{where} hold no label")
             return None
         if len(set(data)) != len(data):
             self.fail(names, f"{where} repeat a label")
+            return None
+        if any(
+            d is not _BARE and all(c.isspace() for c in string_data(cast(str, d))) for _, d in parts
+        ):
+            self.fail(names, f"{where} hold a description with no character that is not whitespace")
             return None
         return tuple(data)
 

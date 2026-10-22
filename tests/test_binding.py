@@ -20,6 +20,7 @@ def test_a_call_result_defaults_every_provenance_member_to_null() -> None:
     assert (result.snapshot, result.elicitation, result.prompt) == (None, None, None)
     assert (result.usage, result.attempts) == (None, None)
     assert result.truncated == ()
+    assert (result.warnings, result.precision) == ((), None)
 
 
 def test_a_call_result_takes_its_provenance_by_keyword_only() -> None:
@@ -71,13 +72,15 @@ def test_a_source_call_holds_what_the_protocol_names() -> None:
         "kind",
         "wording",
         "labels",
+        "descriptions",
         "value_type",
         "is_list",
         "text",
         "reference_date",
     ]
-    # The extraction members are keyword-only.
+    # The descriptions and the extraction members are keyword-only.
     assert [f.name for f in dataclasses.fields(question) if f.kw_only] == [
+        "descriptions",
         "value_type",
         "is_list",
         "text",
@@ -91,3 +94,18 @@ def test_a_source_call_holds_what_the_protocol_names() -> None:
         None,
         None,
     )
+
+
+def test_a_rendered_question_built_without_descriptions_is_aligned_with_its_labels() -> None:
+    question = RenderedQuestion(AnswerKind.choice, "Which?", ("a", "b"))
+    assert question.descriptions == (None, None)
+    extraction = RenderedQuestion(AnswerKind.extraction, "What?", ())
+    assert extraction.descriptions == ()
+    # A non-empty value is kept as given, unchecked.
+    given = RenderedQuestion(AnswerKind.choice, "Which?", ("a", "b"), descriptions=["x", None])  # pyright: ignore[reportArgumentType]
+    assert given.descriptions == ["x", None]
+    # Labels of any length are filled; labels with none are left as given.
+    listed = RenderedQuestion(AnswerKind.choice, "Which?", ["a"])  # pyright: ignore[reportArgumentType]
+    assert listed.descriptions == (None,)
+    odd = RenderedQuestion(AnswerKind.choice, "Which?", None)  # pyright: ignore[reportArgumentType]
+    assert odd.descriptions == ()

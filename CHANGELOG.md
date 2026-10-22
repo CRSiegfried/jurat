@@ -6,10 +6,18 @@ All notable changes to jurat are recorded here. The format follows [Keep a Chang
 
 ### Added
 
+- Label descriptions: a `choice` or `score` label may be `{"name": ..., "description": ...}`, which the design document, the call item and the question's identity hold as declared. `RenderedQuestion.descriptions`, keyword-only, gives each label's description aligned with `labels`, `None` where a label has none. Answers, the answer grid, the lints and the `boundaries` checks read names only.
+- `CallResult.warnings`: the binding's own lines about the call, recorded under the call in `unhashed` and outside every hash. A malformed value is kept in `invalid` and is never a fault.
+- `CallResult.precision`: the decimal places the provider rounds probabilities to, hashed on the call item. A value that is not `None` or an integer from 0 to 17 is `invalid-return` for the whole call.
+- `CauseCode.unsupported`: the marker a binding returns for a ref it will not put to any provider, with the reason as a line of `warnings`. It is the 24th cause code.
+- The record document's `hash` member: the record hash over the log. `read_record` recomputes it and refuses a document whose `hash` is missing or does not match.
 - `ReadView`, the view a function `when`, rule or policy is called with, is public, so a component can be annotated with it. `When`, `Rule` and `Policy` type `function` as `Callable[[ReadView], object]`, so a lambda passes pyright strict.
 
 ### Changed
 
+- Records and design documents are format 3. Every design hash and record hash changes, so golden hashes must be updated. Every format-3 call item holds `precision`.
+- An exception's recorded traceback starts at the component's own frame and names each file by its module, so the record holds no local paths from the traceback.
+- `read_record` reads format-1 and format-2 records and `load` loads format-1 and format-2 design documents to their own hash, each under its format's rules. A format-2 record holding a described label, `precision`, `warnings`, `unsupported` or a `hash` member is refused.
 - `Step` takes its arguments as any `Mapping`, read once through `items()`, and still keeps a read-only copy; a non-mapping is a `TypeError`. The recorded plan is unchanged.
 - Check 4's message for a rule that provides another ref names the rule's own `d:` ref, and for another rule's `d:` ref, whose it would be.
 

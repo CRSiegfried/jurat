@@ -1,9 +1,13 @@
 """Synthetic record logs for the ledger's tests: a normal turn, a broken entry, a cancelled
-turn, a turn whose codec raised a cancellation and a format-2 extraction turn, built item by
-item so a test can take any prefix or swap one item."""
+turn, a turn whose codec raised a cancellation, a format-2 extraction turn and a format-3 turn
+with a described label, a call's precision and warnings and an ``unsupported`` marker, built
+item by item so a test can take any prefix or swap one item."""
 
 import copy
 from typing import Any
+
+from jurat._canonical import hash_value
+from jurat._values import HASH_FORMAT, MAX_DOCUMENT_DEPTH
 
 HASH = "sha256:" + "ab" * 32
 IDENTITY = "sha256:" + "cd" * 32
@@ -177,12 +181,48 @@ EXTRACTION: list[dict[str, Any]] = [
     VERDICT,
 ]
 
+TONE = {"kind": "choice", "labels": ["warm", "cold"], "probabilities": {"warm": 0.7, "cold": 0.3}}
+UNSUPPORTED = {"kind": "Unavailable", "cause": {"code": "unsupported", "refs": ["q:other"]}}
+# A format-3 turn: one call asking a choice question with a described label, answered, and a
+# noul question its binding refused with unsupported, its reason under the call's warnings in
+# UNHASHED. Indices: 0 design, 1 settings, 2 state, 3 call, 4 q:other, 5 q:tone, 6 round 1,
+# 7 plan, 8 verdict.
+DESCRIBED: list[dict[str, Any]] = [
+    {**DESIGN, "format": 3, "helpers": 2},
+    {
+        "item": "settings",
+        "settings": SETTINGS["settings"],
+        "providers": {"q:other": "ask", "q:tone": "ask"},
+        "classes": {"t:state": {"body": "content"}, "q:other": "open", "q:tone": "open"},
+    },
+    {**STATE, "value": {"body": "Thanks so much"}},
+    call(
+        1,
+        "ask",
+        precision=2,
+        questions={
+            "q:other": {"identity": IDENTITY, "kind": "noul", "labels": None},
+            "q:tone": {
+                "identity": IDENTITY,
+                "kind": "choice",
+                "labels": [{"name": "warm", "description": "Friendly or grateful"}, "cold"],
+            },
+        },
+    ),
+    entry("q:other", 1, 3, marker=UNSUPPORTED),
+    entry("q:tone", 1, 3, TONE),
+    round_item(1, 1),
+    {**PLAN, "kind": "inform", "steps": [], "reply": "warm"},
+    VERDICT,
+]
+
 LOGS = {
     "normal": NORMAL,
     "broken": BROKEN,
     "cancelled": CANCELLED,
     "codec-cancelled": CODEC_CANCELLED,
     "extraction": EXTRACTION,
+    "described": DESCRIBED,
 }
 
 # Each log's unhashed members by log-index key, written once the keyed item is in a prefix.
@@ -197,7 +237,18 @@ UNHASHED: dict[str, dict[str, dict[str, Any]]] = {
                 "truncated": ["q:amount"],
             }
         }
-    }
+    },
+    "described": {
+        "calls": {
+            "3": {
+                "start": "2026-10-20T00:00:00Z",
+                "latency": 0.5,
+                "usage": None,
+                "attempts": None,
+                "warnings": ["q:other: this provider takes no noul question"],
+            }
+        }
+    },
 }
 
 
@@ -212,3 +263,14 @@ def unhashed_of(name: str, n: int) -> dict[str, Any]:
 
 def fresh(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return copy.deepcopy(items)
+
+
+def rehashed(doc: dict[str, Any]) -> dict[str, Any]:
+    """A record document whose log a test edited, its ``hash`` recomputed from the log when its
+    format has one, as a job that edits a record's bytes recomputes it."""
+    log = doc["log"]
+    if log and type(log[0]) is dict and log[0].get("format", 0) >= HASH_FORMAT:
+        doc["hash"] = hash_value(log, MAX_DOCUMENT_DEPTH)
+    else:
+        doc.pop("hash", None)
+    return doc

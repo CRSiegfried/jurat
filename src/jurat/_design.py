@@ -113,17 +113,18 @@ class Text:
 @dataclass(frozen=True, slots=True)
 class Question:
     """A ``q:`` ref's question: its kind, wording and labels. ``labels``
-    is ``None``, a sequence of strings, or a mapping of ``fixed`` and ``candidates`` for a
-    candidate-valued label set. An extraction question also declares ``value_type``, a
-    ``ValueType`` member or its string, held as the member; ``is_list``, a boolean; ``text``, a
-    board-ref origin ``{"ref": r}`` naming the string its spans index; and ``reference_date``,
-    such an origin or ``None``. A probability kind's question leaves those four at ``None``,
-    ``False``, ``None`` and ``None``."""
+    is ``None``, a sequence of labels, or a mapping of ``fixed`` and ``candidates`` for a
+    candidate-valued label set. A label is its name, a string, or a mapping of exactly ``name``
+    and ``description``, both strings, held as a read-only copy. An extraction question also
+    declares ``value_type``, a ``ValueType`` member or its string, held as the member;
+    ``is_list``, a boolean; ``text``, a board-ref origin ``{"ref": r}`` naming the string its
+    spans index; and ``reference_date``, such an origin or ``None``. A probability kind's
+    question leaves those four at ``None``, ``False``, ``None`` and ``None``."""
 
     kind: AnswerKind | str
     """An ``AnswerKind`` member or its string, held as the member."""
     wording: Text
-    labels: Sequence[str] | Mapping[str, Any] | None = None
+    labels: Sequence[str | Mapping[str, str]] | Mapping[str, Any] | None = None
     value_type: ValueType | str | None = None
     is_list: bool = False
     text: Mapping[str, str] | None = None
@@ -140,12 +141,12 @@ class Question:
         if isinstance(labels, Mapping):
             snapshot = dict(cast("Mapping[str, Any]", _mapping(labels)))
             if "fixed" in snapshot:
-                snapshot["fixed"] = _strings(snapshot["fixed"])
+                snapshot["fixed"] = _labels(snapshot["fixed"])
             if "candidates" in snapshot:
                 snapshot["candidates"] = _string(snapshot["candidates"])
             labels = MappingProxyType(snapshot)
         else:
-            labels = _strings(labels)
+            labels = _labels(labels)
         _set(
             self,
             kind=kind,
@@ -154,6 +155,40 @@ class Question:
             text=_origin(self.text),
             reference_date=_origin(self.reference_date),
         )
+
+
+def _labels(value: object) -> Any:
+    """A label list as a tuple: each string its string data, each mapping, a described label's
+    ``name`` and ``description``, a read-only copy of it with each string its string data."""
+    members = _sequence(value)
+    if isinstance(members, tuple):
+        return tuple(_label(v) for v in cast("tuple[object, ...]", members))
+    return members
+
+
+def _label(value: object) -> Any:
+    members = _mapping(value)
+    if isinstance(members, MappingProxyType):
+        return MappingProxyType(
+            {k: _string(v) for k, v in cast("Mapping[Any, Any]", members).items()}
+        )
+    return _string(cast(object, members))
+
+
+def label_parts(labels: Sequence[Any]) -> tuple[tuple[str, ...], tuple[str | None, ...]]:
+    """A well-formed label list's names and descriptions, aligned, ``None`` where a label is
+    a bare name; check 10 has passed it."""
+    names: list[str] = []
+    descriptions: list[str | None] = []
+    for label in labels:
+        if isinstance(label, str):
+            names.append(label)
+            descriptions.append(None)
+        else:
+            described = cast("Mapping[str, str]", label)
+            names.append(described["name"])
+            descriptions.append(described["description"])
+    return tuple(names), tuple(descriptions)
 
 
 def _origin(value: object) -> Any:
@@ -477,7 +512,9 @@ class LoadedDesign:
     definitions resolved; ``_needs``, each source's needs with its question slots' refs
     added; ``_groups``, each group's refs in code-point order; ``_graph``,
     each node's predecessors; ``_providers``, the ref-to-provider map;
-    ``_grid``, the answer grid; ``_requirement_bytes``, each source requirement's values as
+    ``_grid``, the answer grid; ``_labels``, each ``q:`` ref's label names and descriptions,
+    aligned, ``None`` where a label is undescribed, ``yes`` and ``no`` for ``noul`` and none for
+    ``extraction``; ``_requirement_bytes``, each source requirement's values as
     canonical bytes, by source id. The class trees, payloads, leaf values and plan-level
     requirements are decoded afresh at each read, so nothing a caller
     changes after load reaches a turn.
@@ -492,6 +529,7 @@ class LoadedDesign:
         "_grid",
         "_groups",
         "_hash",
+        "_labels",
         "_leaf_bytes",
         "_leaf_types",
         "_needs",
@@ -511,6 +549,7 @@ class LoadedDesign:
     _graph: Mapping[str, frozenset[str]]
     _providers: Mapping[str, str]
     _grid: Mapping[str, Any]
+    _labels: Mapping[str, tuple[tuple[str, ...], tuple[str | None, ...]]]
     _classes_bytes: bytes
     _payload_bytes: Mapping[str, bytes]
     _leaf_bytes: Mapping[str, bytes]

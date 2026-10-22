@@ -19,12 +19,18 @@ from jurat._canonical import decode, encode, record_hash
 from jurat._markers import CauseCode, MarkerKind, OutcomeKind, PlanKind, VerdictKind
 from jurat._refs import declared_ref, parse_ref
 from jurat._values import (
+    DESCRIPTION_FORMAT,
     EXTRACTION_FORMAT,
+    FORMAT,
     FORMATS,
+    HASH_FORMAT,
     MAX_DEPTH,
     MAX_DOCUMENT_DEPTH,
     MAX_INTEGER,
     MISSING,
+    PRECISION_FORMAT,
+    UNSUPPORTED_FORMAT,
+    WARNINGS_FORMAT,
     clipped,
     described,
     domain_error,
@@ -255,14 +261,23 @@ def _members(
 
 
 def _cause(value: Any, where: str) -> None:
-    """A cause as a marker holds one: a code from the closed set, and refs as strings."""
+    """A cause as a marker holds one: a code from the closed set, and refs as strings; the
+    append tests the code against its record's format's set."""
     m = _members(value, where, {"code": _STR, "refs": _STRINGS})
-    if m["code"] not in _CAUSE_CODES:
+    # The newest format's set: a shape check knows no record. The append's ``_check_format``
+    # then tests each code against the record's own format's set.
+    if m["code"] not in _CAUSE_CODES[FORMAT]:
         raise _LedgerError(f"{where}'s code {m['code']!r} is not in the closed cause set")
 
 
 _STATE = "t:state"
-_CAUSE_CODES = frozenset(c.value for c in CauseCode)
+_CAUSE_CODES: dict[int, frozenset[str]] = {
+    fmt: frozenset(
+        c.value for c in CauseCode if fmt >= UNSUPPORTED_FORMAT or c is not CauseCode.unsupported
+    )
+    for fmt in FORMATS
+}
+"""Each format's closed cause set."""
 _ANSWER_KINDS = frozenset(AnswerKind)
 _PROBABILITY_KINDS = frozenset(k.value for k in PROBABILITY_KINDS)
 _VALUE_TYPES = frozenset(v.value for v in ValueType)
@@ -315,11 +330,39 @@ def _questions(value: Any, where: str) -> None:
             if labels is not None:
                 raise _LedgerError(f"{at}'s labels are not null, as noul's are")
         elif type(cast(object, labels)) is dict and kind == AnswerKind.choice:
-            _members(labels, f"{at}'s labels", {"fixed": _STRINGS, "candidates": _STR})
+            _members(labels, f"{at}'s labels", {"fixed": _LABELS, "candidates": _STR})
         elif type(cast(object, labels)) is dict:
             raise _LedgerError(f"{at}'s labels are an object, which only a choice's may be")
         else:
-            _STRINGS(labels, f"{at}'s labels")
+            _LABELS(labels, f"{at}'s labels")
+
+
+def _is_label(v: Any) -> bool:
+    """A declared label as a call item writes it: a name, or exactly an object of a string
+    ``name`` and a string ``description``; shallow, as the design document declared it."""
+    if type(v) is str:
+        return True
+    if type(v) is not dict:
+        return False
+    members = cast("dict[str, Any]", v)
+    return set(members) == {"name", "description"} and all(type(m) is str for m in members.values())
+
+
+_LABELS = _kind(
+    lambda v: type(v) is list and all(_is_label(m) for m in cast("list[Any]", v)),
+    "a list of labels, each a string or an object of a name and a description",
+)
+
+
+def _described(questions: dict[str, Any]) -> bool:
+    """Whether a call item's questions declare a label as an object; their shape has passed."""
+    for question in questions.values():
+        labels = cast("dict[str, Any]", question)["labels"]
+        if type(labels) is dict:
+            labels = cast("dict[str, Any]", labels)["fixed"]
+        if type(labels) is list and any(type(m) is dict for m in cast("list[Any]", labels)):
+            return True
+    return False
 
 
 def _sources(value: Any, where: str) -> None:
@@ -513,7 +556,8 @@ _SHAPES: dict[str, _Check] = {
             "elicitation": _STR_OR_NULL,
             "prompt": _STR_OR_NULL,
             "questions": _questions,
-        }
+        },
+        {"precision": _INT_OR_NULL},  # each format's own: the append tests it
     ),
     "round": _shape({"round": _INT, "cost": _NUMBER, "deadline": _BOOL}),
     "certificate": _shape({"round": _INT}),
@@ -669,7 +713,17 @@ def _misfit(value: Any, tree: Any, where: str) -> str | None:
 
 _KEYED = frozenset({"calls", "exceptions", "reads"})
 _INVALID_NAMES = frozenset(
-    {"code", "snapshot", "elicitation", "prompt", "usage", "attempts", "truncated"}
+    {
+        "code",
+        "snapshot",
+        "elicitation",
+        "prompt",
+        "usage",
+        "attempts",
+        "truncated",
+        "warnings",
+        "precision",
+    }
 )
 _NUMBERS = _kind(
     lambda v: type(v) is dict and all(_is_number(n) for n in cast("dict[str, Any]", v).values()),
@@ -715,6 +769,13 @@ def _truncated(value: Any, where: str) -> None:
             )
 
 
+def _warnings(value: Any, where: str) -> None:
+    """The binding's warning lines: a non-empty list of strings, in its order."""
+    _STRINGS(value, where)
+    if not value:
+        raise _LedgerError(f"{where} is empty; an empty member is not written")
+
+
 def _call_entry(value: Any, where: str) -> None:
     _members(
         value,
@@ -725,7 +786,13 @@ def _call_entry(value: Any, where: str) -> None:
             "usage": _or_null(_NUMBERS),
             "attempts": _INT_OR_NULL,
         },
-        {"unexpected": _unexpected, "invalid": _invalid, "sums": _sums, "truncated": _truncated},
+        {
+            "unexpected": _unexpected,
+            "invalid": _invalid,
+            "sums": _sums,
+            "truncated": _truncated,
+            "warnings": _warnings,
+        },
     )
 
 
@@ -807,13 +874,35 @@ def _check_unhashed(
                 )
             _KEYED_ENTRY[member](entry, f"{where}[{key!r}]")
             if member == "calls":
-                if fmt < EXTRACTION_FORMAT and (
-                    "truncated" in entry or "truncated" in entry.get("invalid", {})
-                ):
-                    raise _LedgerError(
-                        f"{where}[{key!r}] holds truncated, which a format-{fmt} record does not"
-                    )
+                _call_entry_format(entry, fmt, f"{where}[{key!r}]")
                 _sums_keys(entry, questions[index], f"{where}[{key!r}]")
+
+
+def _call_entry_format(entry: dict[str, Any], fmt: int, where: str) -> None:
+    """Refuse a ``calls`` entry's member, or ``invalid`` key, that the record's format does not
+    have. The entry has passed its shape check."""
+    invalid = cast("dict[str, Any]", entry.get("invalid", {}))
+    since = (
+        ("truncated", EXTRACTION_FORMAT),
+        ("warnings", WARNINGS_FORMAT),
+        ("precision", PRECISION_FORMAT),
+    )
+    for name, first in since:
+        if fmt < first and (name in entry or name in invalid):
+            raise _LedgerError(f"{where} holds {name}, which a format-{fmt} record does not")
+
+
+def _codes(kind: str, item: dict[str, Any]) -> list[tuple[str, str]]:
+    """Each place of an item a cause code stands, and the code. The item has passed its shape
+    check."""
+    places: list[tuple[str, Any]] = []
+    if kind == "entry" and "marker" in item:
+        places.append(("its marker's cause", item["marker"]["cause"]))
+    elif kind == "call" and type(item["outcome"]) is dict:
+        places.append(("its outcome's cause", cast(object, item["outcome"]["failed"])))
+    elif (kind == "plan" and item["cause"] is not None) or kind == "cause":
+        places.append(("its cause", item["cause"]))
+    return [(place, cast(str, cause["code"])) for place, cause in places]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -885,6 +974,8 @@ class Ledger:
             raise _LedgerError(f"{where} is of no item kind the ledger knows: {kind!r}")
         where = f"{where} ({kind})"
         shape(stored, where)
+        if kind != "design":
+            self._check_format(cast(str, kind), stored, where)
         _no_grounded_ref(cast(str, kind), stored, where)
         _no_set(cast(str, kind), stored, where)
         commit = self._check_order(cast(str, kind), stored, index, where)
@@ -906,6 +997,30 @@ class Ledger:
                     self.observer_error = exc
                 raise
         return index
+
+    def _check_format(self, kind: str, item: dict[str, Any], where: str) -> None:
+        """Refuse a form the log's format does not have: a cause code outside its set, a
+        call item's precision before format 3 or its absence from it, and a described label
+        before format 3. Before the design item every kind is refused by the order check."""
+        fmt = self._format
+        if fmt not in FORMATS:
+            return  # no design item yet: the order check refuses the item
+        for place, code in _codes(kind, item):
+            if code not in _CAUSE_CODES[fmt]:
+                raise _LedgerError(
+                    f"{where}: {place}'s code {code!r} is not in format {fmt}'s cause set"
+                )
+        if kind != "call":
+            return
+        if fmt >= PRECISION_FORMAT and "precision" not in item:
+            raise _LedgerError(f"{where} has no 'precision' member")
+        if fmt < PRECISION_FORMAT and "precision" in item:
+            raise _LedgerError(f"{where} holds precision, which a format-{fmt} record does not")
+        if fmt < DESCRIPTION_FORMAT and _described(item["questions"]):
+            raise _LedgerError(
+                f"{where}: its questions declare a described label, which a format-{fmt} "
+                "record does not"
+            )
 
     # The order checks compute the new check state and return the commit that sets it: the
     # members it adds to the sets and the map kept in place, each grow with its undo, then the
@@ -1245,8 +1360,17 @@ class Record:
 
     @property
     def document(self) -> bytes:
-        """The canonical bytes of the record document, ``{"log": [...], "unhashed": {...}}``."""
-        return b'{"log":[' + b",".join(self._items) + b'],"unhashed":' + self._unhashed + b"}"
+        """The canonical bytes of the record document, ``{"log": [...], "unhashed": {...}}``;
+        from format 3 on also ``hash``, the record hash, derived from the log's bytes."""
+        body = b'"log":[' + b",".join(self._items) + b'],"unhashed":' + self._unhashed + b"}"
+        if self._format < HASH_FORMAT:
+            return b"{" + body
+        return b'{"hash":' + encode(self.record_hash) + b"," + body
+
+    @property
+    def _format(self) -> int:
+        """The design item's format."""
+        return cast(int, decode(self._items[0])["format"])
 
     @property
     def record_hash(self) -> str:
@@ -1299,6 +1423,16 @@ def _prefix_hash(items: list[bytes] | tuple[bytes, ...], n: int) -> str:
 # The read
 
 _RECORD_MEMBERS = ("log", "unhashed")
+_HASH = "hash"
+
+
+_HASH_LENGTH = len("sha256:") + 64
+
+
+def _stated(text: str) -> str:
+    """A stated hash as a message names it: whole up to a hash's length, else clipped."""
+    data = string_data(text)
+    return repr(data) if len(data) <= _HASH_LENGTH else clipped(data)
 
 
 def _named_one_of(key: object, names: tuple[str, ...]) -> bool:
@@ -1353,7 +1487,10 @@ def _read(doc: object) -> Record:
         raise _LedgerError(
             f"the record's format {described(fmt)} is not one this reader knows: {known}"
         )
-    others = [k for k in cast("dict[object, Any]", doc) if not _named_one_of(k, _RECORD_MEMBERS)]
+    members = (*_RECORD_MEMBERS, _HASH) if fmt >= HASH_FORMAT else _RECORD_MEMBERS
+    others = [k for k in cast("dict[object, Any]", doc) if not _named_one_of(k, members)]
+    if fmt < HASH_FORMAT and any(_named_one_of(k, (_HASH,)) for k in others):
+        raise _LedgerError(f"the document holds hash, which a format-{fmt} record does not")
     if others:
         view = (
             ", as a redacted view's is"
@@ -1361,10 +1498,14 @@ def _read(doc: object) -> Record:
             else ""
         )
         shown = "[" + ", ".join(described(k) for k in others) + "]"
-        raise _LedgerError(f"the document has members other than log and unhashed{view}: {shown}")
+        named = "log, unhashed and hash" if fmt >= HASH_FORMAT else "log and unhashed"
+        raise _LedgerError(f"the document has members other than {named}{view}: {shown}")
     unhashed = member_named(cast(object, doc), "unhashed")
     if unhashed is MISSING:
         raise _LedgerError("the document has no unhashed member")
+    stated = member_named(cast(object, doc), _HASH)
+    if fmt >= HASH_FORMAT and stated is MISSING:
+        raise _LedgerError(f"the document has no hash member; a format-{fmt} record holds its hash")
     # The domain is checked per item and on unhashed, each value it holds size-tested where
     # it stands before its holder is walked, never on the log as one value.
     for i, item in enumerate(cast("list[Any]", log)):
@@ -1378,15 +1519,27 @@ def _read(doc: object) -> Record:
     err = domain_error(cast(object, unhashed), _UNHASHED_DEPTH)
     if err is not None:
         raise _LedgerError(f"unhashed is outside the value domain: {err}")
-    for i, entry in enumerate(
-        members_of(member_named(cast(object, unhashed), "calls"))
-    ):  # each usage a value
-        usage = member_named(entry, "usage")
-        if usage is not MISSING:
-            _sized_value(usage, f"unhashed 'calls' entry {i}'s 'usage'")
+    for i, entry in enumerate(members_of(member_named(cast(object, unhashed), "calls"))):
+        for name in ("usage", "warnings"):  # each a value
+            found = member_named(entry, name)
+            if found is not MISSING:
+                _sized_value(found, f"unhashed 'calls' entry {i}'s {name!r}")
     ledger = Ledger()
     for item in cast("list[Any]", log):
         ledger.append(item)
     for name, value in cast("dict[str, Any]", unhashed).items():
         ledger._set_unhashed(string_data(name), _copy(value))  # pyright: ignore[reportPrivateUsage]
-    return ledger.close()
+    record = ledger.close()
+    # After the log reads: the hash is recomputed from its bytes.
+    if fmt >= HASH_FORMAT and type(stated) is not str:
+        raise _LedgerError(
+            f"the document has a hash that is not a string; a format-{fmt} record holds its hash"
+        )
+    # Derived from the bytes, never read as truth: a stated hash the log does not give is an
+    # edit made without recomputing it.
+    if fmt >= HASH_FORMAT and string_data(cast(str, stated)) != record.record_hash:
+        raise _LedgerError(
+            f"the document's hash {_stated(cast(str, stated))} is not its log's record hash, "
+            f"{record.record_hash}"
+        )
+    return record

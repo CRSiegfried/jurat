@@ -50,6 +50,7 @@ from jurat._fixture import _binding_form
 from jurat._ledger import Ledger, _LedgerError
 from jurat.helpers import HELPERS, dead_questions
 from jurat.helpers._points import filled
+from ledger_logs import rehashed
 
 Values = dict[str, Any]
 FORMAT_1 = Path(__file__).parent / "format_1"
@@ -405,13 +406,14 @@ def test_a_truncated_that_does_not_conform_is_kept_in_invalid_alone(value: Any) 
 
 
 def stored(record: Record) -> dict[str, Any]:
-    return {"log": record.log, "unhashed": record.unhashed}
+    doc = {"log": record.log, "unhashed": record.unhashed}
+    return rehashed(doc) if record.log[0]["format"] >= 3 else doc
 
 
 def edited(change: Callable[[dict[str, Any]], None]) -> dict[str, Any]:
     doc = stored(ran(truncated=("q:amount",)))
     change(doc)
-    return doc
+    return rehashed(doc)
 
 
 def at(doc: dict[str, Any], ref: str) -> dict[str, Any]:
@@ -569,12 +571,21 @@ def test_the_ledger_refuses_a_truncated_off_its_shape(truncated: Any, says: str)
 
 
 def format_1(doc: dict[str, Any]) -> None:
+    """A format-3 document made format 1, its call items without format 3's precision."""
     doc["log"][0]["format"] = 1
+    for item in doc["log"]:
+        if item["item"] == "call":
+            del item["precision"]
 
 
 def test_a_format_1_record_holds_only_format_1s_rules() -> None:
     with pytest.raises(InvalidRecord, match="extraction question, which a format-1 record"):
         read_record(edited(format_1))
+    # Without the precision each call item of a format-3 log holds, it is refused first.
+    doc = stored(ran(truncated=("q:amount",)))
+    doc["log"][0]["format"] = 2
+    with pytest.raises(InvalidRecord, match="holds precision, which a format-2 record does not"):
+        read_record(rehashed(doc))
 
     # A format-1 log of the probability kinds, with a truncated member or an invalid one.
     record = read_record((FORMAT_1 / "record.json").read_bytes())
@@ -624,23 +635,23 @@ def test_a_format_1_record_reads_back_to_its_own_hash() -> None:
 
 def test_the_append_refuses_a_design_item_of_an_unknown_format() -> None:
     ledger = Ledger()
-    with pytest.raises(_LedgerError, match="the format 3 is not one this ledger knows"):
-        ledger.append({"item": "design", "hash": GOLDEN_X_DESIGN, "format": 3, "helpers": 2})
+    with pytest.raises(_LedgerError, match="the format 4 is not one this ledger knows"):
+        ledger.append({"item": "design", "hash": GOLDEN_X_DESIGN, "format": 4, "helpers": 2})
 
 
 def test_a_record_of_an_unknown_format_is_refused() -> None:
     def change(doc: dict[str, Any]) -> None:
-        doc["log"][0]["format"] = 3
+        doc["log"][0]["format"] = 4
 
-    with pytest.raises(InvalidRecord, match="format 3 is not one this reader knows: 1, 2"):
+    with pytest.raises(InvalidRecord, match="format 4 is not one this reader knows: 1, 2, 3"):
         read_record(edited(change))
 
 
 # ---------------------------------------------------------------------------------------------
 # The golden format-2 record
 
-GOLDEN_X_DESIGN = "sha256:7207754c8732c54aa2a238eb7617668ae313a6839d25e62bcd95135b9ff6f2f7"
-GOLDEN_X_RECORD = "sha256:ecb39d88077d80c5579764f3e2173f308926e088f1a643aec30d2d8ba512344f"
+GOLDEN_X_DESIGN = "sha256:ab5d4a6d3ee3359d7d27c7317203be0c45ef4eba093f2b970b0d4922c921a006"
+GOLDEN_X_RECORD = "sha256:63bbadd9ba35c8606fe01515cc9dc8127e9a3640c3c1ed704cd5767b613eaf02"
 
 
 def test_the_golden_extraction_record() -> None:
@@ -648,7 +659,7 @@ def test_the_golden_extraction_record() -> None:
     assert record.log[0] == {
         "item": "design",
         "hash": GOLDEN_X_DESIGN,
-        "format": 2,
+        "format": 3,
         "helpers": HELPERS,
     }
     assert (record.design_hash, record.record_hash) == (GOLDEN_X_DESIGN, GOLDEN_X_RECORD)
@@ -762,7 +773,7 @@ def test_a_format_1_record_replays_under_its_format_1_design_with_helpers_mismat
     again, findings = replay_sync(record, loaded)
     assert findings == [{"kind": FindingKind.helpers_mismatch, "recorded": 1, "replayed": HELPERS}]
     assert again is not None
-    assert again.log[0]["format"] == 2  # the engine writes its own format
+    assert again.log[0]["format"] == 3  # the engine writes its own format
 
 
 def test_a_format_1_design_loads_to_its_own_hash_and_keeps_its_format() -> None:
@@ -780,7 +791,7 @@ def test_a_format_1_design_loads_to_its_own_hash_and_keeps_its_format() -> None:
 
     record = decide_sync(loaded, stored_state, {"mail": nothing, "default": nothing}).record
     assert record.log[0]["item"] == "design"
-    assert record.log[0]["format"] == 2  # the engine writes its own format
+    assert record.log[0]["format"] == 3  # the engine writes its own format
 
 
 # ---------------------------------------------------------------------------------------------

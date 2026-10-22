@@ -221,7 +221,7 @@ def parsed_cases() -> list[tuple[Any, str]]:
         ({**with_check_1_defect(), "name": b"x"}, "outside the value domain"),
         ({**with_check_1_defect(), "extra": 1}, 'the member "extra"'),
     ]
-    for value in (0, 3, True, "1", 1.0, None):
+    for value in (0, 4, True, "1", 1.0, None):
         cases.append(({**with_check_1_defect(), "format": value}, "format is not one this engine"))
     for member in ("state", "classes"):
         doc = with_check_1_defect()
@@ -236,7 +236,7 @@ def test_check_11_refuses_a_parsed_document_with_one_failure(given: Any, says: s
 
 
 def test_an_unknown_format_is_refused_before_the_value_domain() -> None:
-    doc = {**with_check_1_defect(), "format": 3, "name": float("nan")}
+    doc = {**with_check_1_defect(), "format": 4, "name": float("nan")}
     assert "format" in gate_failure(doc).message
 
 

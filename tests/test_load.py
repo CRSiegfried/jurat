@@ -77,7 +77,7 @@ def src_hash(fn: Callable[..., Any]) -> str:
 def test_a_minimal_design_writes_every_member_with_its_default() -> None:
     loaded = load(minimal())
     assert decode(loaded.document) == {
-        "format": 2,
+        "format": 3,
         "name": None,
         "state": "record{}",
         "sources": {},
@@ -2070,7 +2070,7 @@ def test_check_10_bounds_a_questions_labels_counted_before_they_are_read(
     (failure,) = only(_asking(["abcd", "efgh", "\ud800"]), 10)  # counted before it is read
     assert failure.message.endswith("labels hold more than 2^3 code points")
     (failure,) = only(_asking(["abcd", "\ud800"]), 10)  # within the bounds, then read
-    assert failure.message.endswith("labels are not a list of strings")
+    assert failure.message.endswith("labels hold a string that is not of Unicode scalar values")
     fixed = {"fixed": ["a", "b", "c", "d", "e"], "candidates": "t:pool"}
     assert any(f.message.endswith("number more than 2^2") for f in refused(_asking(fixed)))
 

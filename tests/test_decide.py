@@ -150,20 +150,20 @@ STATE: dict[str, Any] = {
 SPAM = {"q:spam": {"yes": 0.9, "no": 0.1}, "t:body": "text of the mail"}
 REPLIES: dict[str, object] = {"ask": returns(SPAM), "look": returns({"t:size": 4})}
 
-GOLDEN_DESIGN = "sha256:56f74e4909ca929686a9ec747af56e98ced7a47774c2a43463113a6a61e0a9f4"
-GOLDEN_RECORD = "sha256:b0a8c2aa57a346234e343b9e0945141b4670b4a354686e34dae874c9c10aedc7"
-GOLDEN_BROKEN = "sha256:db44f683b1b48ed9f21cc69c4ab375eb593716bd4eb58891fe67c4fd0648c0e9"
+GOLDEN_DESIGN = "sha256:46db78a006d63c3b5e3acae929bf6f931d2918c72a5f63e5fb6c5d2824d84943"
+GOLDEN_RECORD = "sha256:b423e73193918ccf47a6ef34a8bdd2371de090a3b8f7a08392fb519b8b604c54"
+GOLDEN_BROKEN = "sha256:2b71c9f53deb14365a4912c75b1391497af4a05011da277dc55dedb4bf7a40b4"
 GOLDEN_CANCELLED = (
-    "sha256:94ba99d6ff4e0599556d60114a452dd2eb102303690cfbde20eb2dfd6ba258f2",
-    "sha256:9e7e78e3329927d949dd20a860b662bae7d409d4eaee76aea3b8581237cd0e39",
+    "sha256:e182b2a6cfbfa984130f8836ea138ea236496be80926f8dba9a0236705ff4ee3",
+    "sha256:d11ee4219816c1110d6b149e67ef583d41b8c7cf692647d46a7a0955c265dae6",
 )
 GOLDEN_REFUSED = (
-    "sha256:7ba1bc87db5159eed8939f4f7fe8195b8e708d246e0c5091fac21086f8aabcb2",
-    "sha256:fa207a821eaf54e45715332a64a9094af1d33b016f268dd60b53bb7a48fb6320",
+    "sha256:e03c95f2702e22311e8dac5afc694e9354e5a4949ad30eee260564bf792aa6ad",
+    "sha256:11a3f00f19e354894cff1a349a375f790971838bfa17afefd06846f2e6d1a539",
 )
 GOLDEN_ESCALATE = (
-    "sha256:b02acd4f3b1371fe748a484f1ee1ba1c16da2ed266cd4468e275f178276b96ae",
-    "sha256:3213de316b8e9e2876c521cade47856244cbfe25e40578e73b17dc9d51315844",
+    "sha256:736ebc7413621e5eec8baf3a5d4aed4fe9044b500d14bc4e65016b5b8983cedd",
+    "sha256:6e94bcb0d4c7ee69b99c9a21179c559f31859c3ce1864c0dfb065bd5b27ff1c1",
 )
 """Each a pair: the design hash, then the record hash."""
 
@@ -393,7 +393,7 @@ def test_the_golden_hashes_hold_under_every_hash_seed(seed: str) -> None:
 
 def test_the_design_and_settings_items_bytes() -> None:
     log = go().record.log
-    assert log[0] == {"item": "design", "hash": LOADED.design_hash, "format": 2, "helpers": 2}
+    assert log[0] == {"item": "design", "hash": LOADED.design_hash, "format": 3, "helpers": 2}
     assert log[1] == {
         "item": "settings",
         "settings": {

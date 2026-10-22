@@ -45,6 +45,7 @@ from jurat._design import (
     Text,
     When,
     document_value,
+    label_parts,
     live_value,
     new_failure,
 )
@@ -81,6 +82,7 @@ from jurat._types import (
     value_conforms,
 )
 from jurat._values import (
+    DESCRIPTION_FORMAT,
     EXTRACTION_FORMAT,
     FORMAT,
     FORMATS,
@@ -98,6 +100,7 @@ from jurat._values import (
 )
 
 _STATE = "t:state"
+_NOUL_LABELS = ("yes", "no")
 _ROLES = frozenset({"policy", "codec"})
 _WORDS = frozenset(
     {
@@ -998,8 +1001,10 @@ class _Loader:
             if extraction:
                 self.extraction_bounds(owner, key, where, entry, question)
                 continue
-            labels = ("no", "yes") if question.kind is AnswerKind.noul else question.labels
-            assert isinstance(labels, tuple)
+            if question.kind is AnswerKind.noul:
+                labels: tuple[str, ...] = _NOUL_LABELS
+            else:  # the names alone: a description is no label
+                labels = label_parts(cast("tuple[Any, ...]", question.labels))[0]
             for role in ("bar", "margin"):
                 for path in self.typed(entry[role]):
                     self.bound(owner, where, path, self.leaf_types[path], _UNIT, "number [0, 1]")
@@ -1250,6 +1255,22 @@ class _Loader:
             else:
                 self.fail(11, names, f"{where}'s {_q(member)} is not what load computes from it")
 
+    def label_parts(self) -> dict[str, tuple[tuple[str, ...], tuple[str | None, ...]]]:
+        """Each question's label names and descriptions, aligned: ``yes`` and ``no`` for
+        ``noul``, none for ``extraction``."""
+        parts: dict[str, tuple[tuple[str, ...], tuple[str | None, ...]]] = {}
+        for _, source in self.sources():
+            for ref, provided in source.provides.items():
+                if not isinstance(provided, Question):
+                    continue
+                if provided.kind is AnswerKind.noul:
+                    parts[ref] = (_NOUL_LABELS, (None, None))
+                elif provided.kind is AnswerKind.extraction:
+                    parts[ref] = ((), ())
+                else:  # check 12 refuses a candidate-valued label set
+                    parts[ref] = label_parts(cast("tuple[Any, ...]", provided.labels))
+        return parts
+
     def loaded(self, document: bytes, graph: Mapping[str, frozenset[str]]) -> LoadedDesign:
         decoded = cast("dict[str, Any]", decode(document))
         providers = self.provider_map()
@@ -1294,6 +1315,7 @@ class _Loader:
             graph=graph,
             providers=MappingProxyType(providers),
             grid=_grid(decoded),
+            labels=MappingProxyType(self.label_parts()),
             classes_bytes=encode(classes, MAX_DOCUMENT_DEPTH),
             payload_bytes=MappingProxyType(
                 {s: encode(v["payload"]) for s, v in decoded["sources"].items()}
@@ -1480,6 +1502,11 @@ def _function(fn: Callable[..., Any], version: str | None) -> dict[str, Any]:
     }
 
 
+def _label(label: object) -> object:
+    """A label as the document writes it: a name, or an object of name and description."""
+    return label if isinstance(label, str) else dict(cast("Mapping[str, str]", label))
+
+
 def _text(text: Text) -> dict[str, Any]:
     return {
         "template": text.template,
@@ -1495,7 +1522,10 @@ def _source(source: Source) -> dict[str, Any]:
             provides[ref] = {
                 "kind": str(provided.kind),
                 "wording": _text(provided.wording),
-                "labels": None if labels is None else list(cast("tuple[str, ...]", labels)),
+                # As declared: a described label is its object of name and description.
+                "labels": None
+                if labels is None
+                else [_label(v) for v in cast("tuple[object, ...]", labels)],
             }
             if provided.kind is AnswerKind.extraction:
                 date = provided.reference_date
@@ -1951,6 +1981,7 @@ def _function_failures(
 
 
 _QUESTION = frozenset({"kind", "wording", "labels"})
+_LABEL = frozenset({"name", "description"})
 _EXTRACTION = _QUESTION | {"value_type", "is_list", "text", "reference_date"}
 
 
@@ -1972,9 +2003,19 @@ def _source_failures(
             yield from _missing_or_extra(provided, members, shown, at)
         if isinstance(provided.get("wording"), dict):
             yield from _text_failures(provided["wording"], f"{shown}'s wording", at)
-        if isinstance(provided.get("labels"), dict):
+        declared: object = provided.get("labels")
+        listed = declared
+        if isinstance(declared, dict):
+            label_set = cast("dict[str, Any]", declared)
             labels = frozenset({"fixed", "candidates"})
-            yield from _missing_or_extra(provided["labels"], labels, f"{shown}'s labels", at)
+            yield from _missing_or_extra(label_set, labels, f"{shown}'s labels", at)
+            listed = label_set.get("fixed")
+        described = _items(cast(object, listed))
+        if described and fmt < DESCRIPTION_FORMAT:
+            yield at, f"{shown} has a described label, which format {fmt} does not have"
+        else:
+            for label in described:
+                yield from _missing_or_extra(label, _LABEL, f"{shown}'s described label", at)
     if isinstance(source.get("when"), dict):
         yield from _missing_or_extra(source["when"], _FUNCTION, f"{where}'s when", names)
     if isinstance(source.get("requirement"), dict):

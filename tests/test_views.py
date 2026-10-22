@@ -42,6 +42,7 @@ from ledger_logs import (
     call,
     entry,
     fresh,
+    rehashed,
     round_item,
     unhashed_of,
 )
@@ -60,7 +61,7 @@ def digest(value: Any, record: Record, root: bytes = ROOT) -> str:
 
 
 def read(log: list[dict[str, Any]], unhashed: dict[str, Any] | None = None) -> Record:
-    return read_record({"log": log, "unhashed": unhashed or {}})
+    return read_record(rehashed({"log": log, "unhashed": unhashed or {}}))
 
 
 def view(record: Record, root: bytes = ROOT) -> dict[str, Any]:
@@ -557,7 +558,11 @@ def test_every_prefix_of_the_test_logs_redacts_and_escalates(name: str, n: int) 
     for key, keyed in record.unhashed.get("calls", {}).items():
         if "truncated" in keyed:  # declared refs, open
             assert out["unhashed"]["calls"][key]["truncated"] == keyed["truncated"]
+        if "warnings" in keyed:  # the binding's text, one digest
+            warned = out["unhashed"]["calls"][key]["warnings"]
+            assert warned == digest(keyed["warnings"], record)
     assert out["redacted"] == record.record_hash
+    assert out.get("hash") == (record.record_hash if record.log[0]["format"] >= 3 else None)
     assert len(out["log"]) == n
     escalation(record)
 

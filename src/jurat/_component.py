@@ -18,6 +18,7 @@ the helper log as ``derivation`` holds it, and a read on the live board.
 """
 
 import inspect
+import re
 import traceback
 import types
 from collections.abc import Callable, Mapping
@@ -169,8 +170,68 @@ def exception_record(exc: BaseException) -> dict[str, str]:
     return {
         "type": type_name(exc),
         "message": guarded(lambda: str(exc)),
-        "traceback": guarded(lambda: "".join(traceback.format_exception(exc))),
+        "traceback": guarded(lambda: "".join(_traceback(exc).format())),
     }
+
+
+def _traceback(exc: BaseException) -> traceback.TracebackException:
+    """CPython's traceback of ``exc``, as ``format_exception`` builds it, with its source lines
+    looked up and then its frames edited, never its text composed. Along the chain and each
+    group, a stack drops its leading run of frames of ``jurat``, ``asyncio`` or a module under
+    either, so its first frame is the component's; a stack that is all such frames, as a
+    builtin component's is, keeps them all. Each remaining frame's filename
+    becomes its module's name, the frame's ``__name__`` global when that is an exact ``str``,
+    else the text after its last ``/`` or ``\\``; a pseudo-file such as ``<string>`` is kept
+    as it is."""
+    built = traceback.TracebackException(
+        type(exc), exc, exc.__traceback__, lookup_lines=True, compact=True
+    )
+    pending: list[tuple[traceback.TracebackException, BaseException]] = [(built, exc)]
+    while pending:  # a TracebackException links each exception once, so the walk ends
+        te, e = pending.pop()
+        _edit(te.stack, [frame for frame, _ in traceback.walk_tb(e.__traceback__)])
+        # Each linked exception as the TracebackException read it.
+        if te.__cause__ is not None and e.__cause__ is not None:
+            pending.append((te.__cause__, e.__cause__))
+        if te.__context__ is not None and e.__context__ is not None:
+            pending.append((te.__context__, e.__context__))
+        grouped = te.exceptions
+        if grouped is not None and isinstance(e, BaseExceptionGroup):
+            members = cast("tuple[BaseException, ...]", e.exceptions)
+            pending += zip(grouped, members, strict=False)
+    return built
+
+
+def _edit(stack: traceback.StackSummary, frames: list[types.FrameType]) -> None:
+    """Drop a stack's leading engine frames and name each remaining frame's file by its
+    module; ``frames`` are the traceback's, the stack's entries their prefix."""
+    modules = [_module(f) for f in frames[: len(stack)]]
+    drop = 0
+    while drop < len(modules) and (
+        _within(modules[drop], "jurat") or _within(modules[drop], "asyncio")
+    ):
+        drop += 1
+    if drop == len(stack):
+        drop = 0  # a builtin component has no frame of its own: every entry is kept
+    del stack[:drop]
+    for summary, module in zip(stack, modules[drop:], strict=False):
+        name = summary.filename
+        if name.startswith("<") and name.endswith(">"):
+            continue  # a pseudo-file
+        summary.filename = module if module is not None else re.split(r"[/\\]", name)[-1]
+
+
+def _module(frame: types.FrameType) -> str | None:
+    """A frame's ``__name__`` global when it is an exact ``str``."""
+    name: object = _DICT_GET(frame.f_globals, "__name__", None)
+    return name if type(name) is str else None
+
+
+def _within(module: str | None, package: str) -> bool:
+    return module is not None and (module == package or module.startswith(package + "."))
+
+
+_DICT_GET = cast(Callable[[object, str, object], object], dict.get)  # pyright: ignore[reportUnknownMemberType]
 
 
 def now() -> str:

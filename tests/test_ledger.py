@@ -631,7 +631,7 @@ def question(**members: Any) -> dict[str, Any]:
             (
                 R1_DONE,
                 call(2, "s", questions=question(kind="choice", labels=None)),
-                "labels is not a list of strings",
+                "labels is not a list of labels",
             ),
             (
                 R1_DONE,

@@ -28,6 +28,7 @@ from jurat import types as t
 from jurat._fixture import FixtureBinding, RecordedCalls
 from jurat._typed import decoded
 from jurat._types import AnswerType, Interval, ListOf, MappingOf, Nullable, RecordOf, Scalar
+from ledger_logs import rehashed
 from scripted import Scripted, raising, returns
 from test_decide import ASK, BODY, SPAM, bound, go, slice_design
 
@@ -74,7 +75,7 @@ def values(result: object) -> dict[str, Any]:
 def edited(record: Record, change: Any) -> Record:
     doc = json.loads(record.document)
     change(doc["log"])
-    return read_record(doc)
+    return read_record(rehashed(doc))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -92,6 +93,13 @@ def test_each_asked_ref_gets_its_recorded_value_typed_and_provenance_is_null() -
     }
     assert type(got["t:weight"]) is float
     assert type(got["t:size"]) is int
+
+
+def test_the_fixture_returns_a_null_precision_and_no_truncated_refs_or_warnings() -> None:
+    record = recorded(ask=returns(SPAM, precision=2, warnings=("rounded",)))
+    result = answer(fixture(record), ask(), body())
+    assert type(result) is CallResult
+    assert (result.precision, result.warnings, result.truncated) == (None, (), ())
 
 
 def test_a_q_value_is_its_probabilities_with_an_integral_one_a_float() -> None:
@@ -112,7 +120,7 @@ def test_a_q_value_that_is_not_an_answers_object_is_refused_before_the_fixture()
         edited(recorded(), change)
 
 
-@pytest.mark.parametrize("code", ["refused", "invalid-answer", "invalid-return"])
+@pytest.mark.parametrize("code", ["refused", "invalid-answer", "invalid-return", "unsupported"])
 def test_a_ref_recorded_with_a_binding_marker_comes_back_as_that_marker(code: str) -> None:
     reply = {**SPAM, "q:spam": Unavailable(Cause(code, ["x"]))}
     if code == "invalid-answer":
@@ -305,7 +313,7 @@ def merged(record: Record) -> Record:
         if item["item"] == "entry" and item["call"] is not None:
             item["call"] = first
     doc["unhashed"] = {}
-    return read_record(doc)
+    return read_record(rehashed(doc))
 
 
 def test_a_subset_of_a_recorded_failed_call_of_several_sources_comes_back_as_that_failed() -> None:

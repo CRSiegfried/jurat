@@ -4,8 +4,9 @@ escalation target or a verifier.
 ``escalation(record)`` returns the escalation's four members, or ``None`` for a record that
 holds none, reading only the ``plan`` and ``verdict`` items and the record hash. ``redact(record,
 root_key)`` returns the redacted view's document as canonical bytes: the record's ``log`` and
-``unhashed`` with a keyed digest where each ``content`` or ``identifier`` value was, and
-``redacted``, the record hash its key came from. Which value takes which class is set by the default
+``unhashed`` with a keyed digest where each ``content`` or ``identifier`` value was,
+``redacted``, the record hash its key came from, and from format 3 on the document's ``hash``,
+open. Which value takes which class is set by the default
 classes.
 
 A v0.0.1 record holds no grounded ref and no origin carrying ``set``, since the ledger refuses
@@ -24,7 +25,7 @@ from jurat._ledger import Record
 from jurat._markers import PlanKind, VerdictKind
 from jurat._refs import declared_ref
 from jurat._typed import is_a
-from jurat._values import MAX_DOCUMENT_DEPTH, type_name
+from jurat._values import HASH_FORMAT, MAX_DOCUMENT_DEPTH, type_name
 
 _OPEN = "open"
 
@@ -101,6 +102,8 @@ def redact(record: Record, root_key: bytes) -> bytes:
         "unhashed": walk.unhashed(closed.unhashed),
         "redacted": record_hash,
     }
+    if log[0]["format"] >= HASH_FORMAT:  # the document's hash, open
+        view["hash"] = record_hash
     return encode(view, MAX_DOCUMENT_DEPTH)
 
 
@@ -193,10 +196,10 @@ class _Walk:
     # -- unhashed ----------------------------------------------------------------------------
 
     def unhashed(self, unhashed: dict[str, Any]) -> dict[str, Any]:
-        """``unhashed`` with its text digested: exception text, ``unexpected`` whole,
-        ``invalid``'s ``repr`` text, the ``reads`` values and an unknown member whole; member
-        names, log-index keys, ``usage``, ``sums``, ``truncated``, times, the engine and codec
-        names and an exception's ``type`` are open."""
+        """``unhashed`` with its text digested: exception text, ``unexpected`` and ``warnings``
+        each whole, ``invalid``'s ``repr`` text, the ``reads`` values and an unknown member
+        whole; member names, log-index keys, ``usage``, ``sums``, ``truncated``, times, the
+        engine and codec names and an exception's ``type`` are open."""
         out: dict[str, Any] = {}
         for member, value in unhashed.items():
             if member in ("turn", "engine", "codec"):
@@ -225,6 +228,8 @@ class _Walk:
         out = dict(entry)
         if "unexpected" in entry:
             out["unexpected"] = self.digest(entry["unexpected"])
+        if "warnings" in entry:  # the binding's text, one value
+            out["warnings"] = self.digest(entry["warnings"])
         if "invalid" in entry:
             invalid = cast("dict[str, Any]", entry["invalid"])
             out["invalid"] = {name: self.digest(text) for name, text in invalid.items()}

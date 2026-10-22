@@ -71,12 +71,17 @@ from jurat._values import (
 
 _STATE = "t:state"
 _DEFAULT = "default"
-_NOUL_LABELS = ("yes", "no")
 _PROVENANCE = ("snapshot", "elicitation", "prompt")
 
 _C = CauseCode
 _STRUCTURAL = frozenset({_C.raised, _C.timed_out, _C.invalid_return, _C.unexpected_ref})
-_BINDING_MARKERS = frozenset({_C.refused, _C.invalid_answer, _C.invalid_return})
+_BINDING_MARKERS = frozenset({_C.refused, _C.invalid_answer, _C.invalid_return, _C.unsupported})
+MAX_WARNINGS = 2**8
+"""The most lines a call's ``warnings`` holds."""
+MAX_WARNING_CODE_POINTS = 2**16
+"""The most code points a call's ``warnings`` holds in all."""
+MAX_PRECISION = 17
+"""The most decimal places a call's ``precision`` names: past it a double holds no more."""
 _MARKER_KINDS: dict[type[Undetermined], str] = {
     Unsure: "Unsure",
     Unavailable: "Unavailable",
@@ -257,6 +262,10 @@ class _Judged:
     """Each answer's sum, rounded once, where it lies off 1 by more than the flag allows."""
     truncated: list[str] = field(default_factory=list[str])
     """The ``q:`` refs the binding reported cut short, in code-point order."""
+    warnings: list[str] = field(default_factory=list[str])
+    """The binding's warning lines, in its order."""
+    precision: int | None = None
+    """The decimal places the provider rounds probabilities to; null on a failed call."""
 
 
 def _judge(batch: _Batch, returned: _Returned, types: Mapping[str, Type]) -> _Judged:
@@ -311,11 +320,19 @@ def _judge(batch: _Batch, returned: _Returned, types: Mapping[str, Type]) -> _Ju
         judged.truncated = _truncated(
             cast(object, getattr(result, "truncated", ())), batch, judged.invalid
         )
+        judged.warnings = _warnings(cast(object, getattr(result, "warnings", ())), judged.invalid)
+        precision = cast(object, getattr(result, "precision", None))
+        if precision is None or (type(precision) is int and 0 <= precision <= MAX_PRECISION):
+            judged.precision = precision
+        else:
+            judged.invalid["precision"] = guarded_repr(precision)
+            codes.append(_C.invalid_return)
     else:
         codes.append(_C.invalid_return)
     if codes:
         judged.failed = Cause(codes[0], list(batch.refs))
         judged.provenance = dict.fromkeys(_PROVENANCE)
+        judged.precision = None
         marker = Unavailable(judged.failed)
         judged.written = dict.fromkeys(batch.refs, marker)
         return judged
@@ -391,8 +408,25 @@ def _truncated(value: object, batch: _Batch, invalid: dict[str, str]) -> list[st
     return []
 
 
+def _warnings(value: object, invalid: dict[str, str]) -> list[str]:
+    """A ``warnings`` of exactly a tuple of exact ``str``, each holding a character that is not
+    whitespace and in the value domain, at most ``MAX_WARNINGS`` of them holding at most
+    ``MAX_WARNING_CODE_POINTS`` code points in all, counted before any is read, in the binding's
+    order; else nothing, with the value kept in ``invalid``. Never a fault."""
+    if type(value) is tuple:
+        members = cast("tuple[object, ...]", value)
+        if len(members) <= MAX_WARNINGS and all(type(m) is str for m in members):
+            lines = cast("tuple[str, ...]", members)
+            if sum(len(m) for m in lines) <= MAX_WARNING_CODE_POINTS and all(
+                m and not m.isspace() and domain_error(m) is None for m in lines
+            ):
+                return list(lines)
+    invalid["warnings"] = guarded_repr(cast(object, value))
+    return []
+
+
 def _binding_marker(ref: str, value: object) -> Unavailable:
-    """One of the three markers a binding may return, naming ``ref`` alone; any other marker
+    """One of the four markers a binding may return, naming ``ref`` alone; any other marker
     is ``invalid-return``."""
     if type(value) is Unavailable:
         cause = getattr(value, "cause", None)
@@ -678,6 +712,8 @@ class _Turn:
                 unhashed["sums"] = judged.sums
             if judged.truncated:
                 unhashed["truncated"] = judged.truncated
+            if judged.warnings:
+                unhashed["warnings"] = judged.warnings
             self.ledger.write_unhashed("calls", unhashed, index)
             if outcome.error is not None:
                 self.ledger.write_unhashed("exceptions", exception_record(outcome.error), index)
@@ -847,9 +883,12 @@ class _Turn:
                         questions[ref], labels[ref] = q, ()
                         rendered[ref] = self.extraction(ref, q, wording, needs, texts)
                         continue
-                    passed = _NOUL_LABELS if kind is AnswerKind.noul else tuple(cast(Any, q.labels))
+                    # The names; each description beside its name, aligned.
+                    passed, descriptions = self.loaded._labels[ref]
                     questions[ref], labels[ref] = q, passed
-                    rendered[ref] = RenderedQuestion(kind, wording, passed)
+                    rendered[ref] = RenderedQuestion(
+                        kind, wording, passed, descriptions=descriptions
+                    )
             t_refs = tuple(ref for ref in provided if ref not in rendered)
             calls.append(SourceCall(sid, self.loaded._payload(sid), needs, t_refs, rendered))
             refs += provided
@@ -968,6 +1007,7 @@ class _Turn:
             "sources": list(batch.sources),
             "outcome": outcome,
             **judged.provenance,
+            "precision": judged.precision,
             "questions": questions,
         }
 

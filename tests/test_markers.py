@@ -53,12 +53,13 @@ CAUSE_SET = {
     "cancelled",
     "carried",
     "abstained",
+    "unsupported",
 }
 
 
 def test_the_cause_set_is_exactly_the_decisions() -> None:
     assert {c.value for c in CauseCode} == CAUSE_SET
-    assert len(CauseCode) == 23
+    assert len(CauseCode) == 24
 
 
 @pytest.mark.parametrize(
