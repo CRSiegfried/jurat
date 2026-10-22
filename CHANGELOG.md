@@ -2,7 +2,7 @@
 
 All notable changes to jurat are recorded here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, a minor release may break the API; each break is listed under **Changed** or **Removed**.
 
-## [Unreleased]
+## [0.3.0] - 2026-10-22
 
 ### Added
 
