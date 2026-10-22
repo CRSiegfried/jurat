@@ -545,10 +545,15 @@ def _text(value: object) -> str:
 
 
 def _record_form(value: object) -> object:
-    """A live board or leaf value in the record's form: each ``bytes`` as unpadded base64url. A
-    slot's value is never an answer: load refuses a ``q:`` slot."""
+    """A live board or leaf value in the record's form: each ``bytes`` as unpadded base64url
+    and each answer as its document, at every depth. A slot's value is never an answer: load
+    refuses a ``q:`` slot; a need's may be, which ``from_record`` compares."""
     if type(value) is bytes:
         return b64url_encode(value)
+    if type(value) is Answer:
+        return answer_document(value)
+    if type(value) is ExtractionAnswer:
+        return extraction_document(value)
     if type(value) is dict:
         return {k: _record_form(v) for k, v in cast("dict[str, object]", value).items()}
     if type(value) in (list, tuple):

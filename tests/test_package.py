@@ -78,6 +78,7 @@ PUBLIC = {
     "replay",
     "replay_sync",
     "FindingKind",
+    "from_record",
 }
 TYPE_CONSTRUCTORS = {
     "number",

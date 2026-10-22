@@ -31,6 +31,7 @@ from jurat._design import (
     Text,
     When,
 )
+from jurat._fixture import from_record
 from jurat._guard import GuardFailure, Verdict
 from jurat._ledger import InvalidRecord, Record, read_record
 from jurat._load import load
@@ -103,6 +104,7 @@ __all__ = [
     "decide",
     "decide_sync",
     "escalation",
+    "from_record",
     "load",
     "read_record",
     "redact",
