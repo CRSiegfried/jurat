@@ -346,7 +346,20 @@ def test_check_9_the_text_ref_is_exactly_string_not_nullable(state: str) -> None
 )
 def test_check_9_the_reference_date_ref_is_exactly_string(today: Any) -> None:
     d = x.design(state=t.record(body=t.string, today=today))
-    only(d, 9, 'reference_date names "t:state.today", whose type is not exactly string')
+    only(d, 9, f'reference_date names "t:state.today", whose type is {today}, not exactly string')
+
+
+@pytest.mark.parametrize(
+    ("body", "shown"),
+    [
+        (t.integer(), "integer"),
+        (t.nullable(t.string), "string or null"),
+        ("words", "words"),
+    ],
+)
+def test_check_9_the_text_refusal_names_the_type_as_written(body: Any, shown: str) -> None:
+    d = x.design(types={"words": t.integer()}, state=t.record(body=body, today=t.string))
+    only(d, 9, f'names "t:state.body", whose type is {shown}, not exactly string')
 
 
 def test_a_type_definition_naming_string_is_exactly_string() -> None:

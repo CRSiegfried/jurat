@@ -78,6 +78,7 @@ from jurat._types import (
     named,
     parse_type,
     read_type,
+    render,
     resolve,
     value_conforms,
 )
@@ -924,7 +925,8 @@ class _Loader:
                 self.fail(
                     9,
                     names,
-                    f"{u.where} names {_q(u.ref)}, whose type is not exactly string, not nullable",
+                    f"{u.where} names {_q(u.ref)}, whose type is {render(t)}, not exactly "
+                    "string, not nullable",
                 )
         # Every requirement on the plan can hold. A step's requirements are
         # in plan declarations, which check 12 refuses, so this engine applies the clause to
