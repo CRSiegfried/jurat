@@ -11,6 +11,10 @@ binding under every declared oracle name and ``default``, the observer, and the 
 place of a clock reading. A cancellation or the observer's exception
 propagates as decide lets it out, with the replay record so far and no findings.
 
+``_replay_with`` is the rerun itself, its fixture built from a given log's calls while the
+state entry, the settings, the cut and the compared log are the record's; ``replay`` gives the
+record's log as both, and the evaluation subpackage's ``use_answers`` another record's.
+
 The findings are plain ``dict``s in a fixed order, two items differing when their
 canonical bytes differ. Replay reads nothing from ``unhashed``.
 
@@ -69,9 +73,23 @@ async def replay(
     log = record.log  # read once: every read decodes afresh
     if not any(item["item"] == "verdict" for item in log):
         return None, [{"kind": _K.unfinished}]
-    state = [item for item in log if item["item"] == "entry" and item["ref"] == _STATE]
-    if not state:
+    if not any(item["item"] == "entry" and item["ref"] == _STATE for item in log):
         return None, [{"kind": _K.nothing_to_replay}]
+    return await _replay_with(log, loaded, log, observer=observer)
+
+
+async def _replay_with(
+    log: list[dict[str, Any]],
+    loaded: LoadedDesign,
+    answers: list[dict[str, Any]],
+    *,
+    observer: Observer | None,
+) -> tuple[Record, list[Finding]]:
+    """Rerun the finished turn ``log`` holds, with a state entry, under ``loaded``, the
+    fixture built from the call items and entries of ``answers``; the state entry, the run
+    settings, the cut and the log every finding compares against are ``log``'s."""
+    # Both callers checked that the log holds a state entry.
+    state = next(item for item in log if item["item"] == "entry" and item["ref"] == _STATE)
     # The settings item is second in every record from the design item on.
     recorded = cast("dict[str, Any]", log[1]["settings"])
     run = run_settings(
@@ -81,11 +99,11 @@ async def replay(
         recorded["deadline"],
         recorded["certificate_cap"],
     )
-    calls = RecordedCalls(log)
+    calls = RecordedCalls(answers)
     fixture = FixtureBinding(calls, loaded)
     keys = {s.oracle for s in loaded._design.sources.values() if s.oracle is not None}
     bindings = _bound(loaded, dict.fromkeys({*keys, _DEFAULT}, fixture))
-    value = decoded(state[0]["value"], loaded._types[_STATE])
+    value = decoded(state["value"], loaded._types[_STATE])
     decision = await _turn(
         loaded, value, bindings, run, codec=None, clock=None, cut=_cut(log), observer=observer
     )

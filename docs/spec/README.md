@@ -8,13 +8,13 @@ For v0.0.1 the spec covers:
 - decide: the turn's entry with the codec, the broken entry, interpret over rounds of sources and function rules, the three markers and their causes, and compile with a function policy, the plan rules and the guard;
 - the ledger and the observer, the record with its canonical JSON encoding and hashes, and reading a stored record back;
 - the record views: the escalation view and the redacted view;
-- replay of a recorded turn with no model call;
+- replay of a recorded turn with no model call, and the evaluation job `use_answers`;
 - the binding protocol between the engine and a model adapter;
 - the answer kinds: `noul`, `choice` and `score`, which give a probability to each label, and `extraction`, a typed value read from a text, with the probability that the text holds none, the model's reading whatever it answered, its confidence and the span it read;
 - the helpers: the choice helpers, `extract` among them, and the combinators rules call, and the reference runner that runs a plan's steps;
 - the live frontier, the answer grid and the `boundaries` fields, and the design lints that read them.
 
-Outside v0.0.1: decision tables and data rules, plan declarations, candidate sets, the run-time stopping certificate, multi-turn continuation, and the evaluation subpackage.
+Outside v0.0.1: decision tables and data rules, plan declarations, candidate sets, the run-time stopping certificate, multi-turn continuation, and every evaluation job but `use_answers`.
 
 The sections below are written; the rest is not yet.
 
@@ -38,7 +38,7 @@ A `choice` or `score` label is a name or exactly `{"name": n, "description": d}`
 
 `CallResult.precision` is the decimal places the provider rounds probabilities to. It is `None` when unknown, or when the provider rounds to a step that is not a decimal count. It is `None` or an integer from 0 to 17, `bool` excluded; any other value is `invalid-return` for the whole call, with `invalid["precision"]`. It is hashed on the call item beside `snapshot`, present on every format-3 call item, null on a failed one. The engine does not test that probabilities are rounded to it. The fixture binding returns `None`, as it returns null provenance and no `truncated` or `warnings`.
 
-A binding that will not put a question to any provider, because its ref, kind or shape is outside what the provider takes, returns `Unavailable` with the code `unsupported` for that ref. A binding that refuses a whole batch marks every ref. Interpret writes the marker with a cause naming that ref; the cause carries no text. The binding gives its reason as a line of `warnings`. The call is `returned` and charged, and its call item holds null provenance where no provider was called. `unsupported` is one of the four markers a binding may return, with `refused`, `invalid-answer` and `invalid-return`. It is never a `Failed` outcome's code (a `Failed` carrying it is `invalid-return`), never a plan's cause and never the guard's. Replay's fixture returns it as recorded.
+A binding that will not put a question to any provider, because its ref, kind or shape is outside what the provider takes, returns `Unavailable` with the code `unsupported` for that ref. A binding that refuses a whole batch marks every ref. Interpret writes the marker with a cause naming that ref; the cause carries no text. The binding gives its reason as a line of `warnings`. The call is `returned` and charged, and its call item holds null provenance where no provider was called. `unsupported` is one of the four markers a binding may return, with `refused`, `invalid-answer` and `invalid-return`. It is never a `Failed` outcome's code (a `Failed` carrying it is `invalid-return`), never a plan's cause and never the guard's. A rule that returns the marker it read provides it unchanged, so `unsupported` stands on a `d:` entry with its refs as any binding code does. Replay's fixture returns it as recorded.
 
 ## The extraction kind
 
@@ -48,3 +48,8 @@ The binding returns, for the question's ref, exactly an object of `value`, `gues
 
 The binding may also report the refs whose response was cut short as `truncated`, which the record keeps outside every hash.
 
+## Evaluation
+
+`jurat.evaluation.use_answers(record, loaded, other)` reruns `record`'s turn under `loaded` with `other`'s call items and entries answering, `q:` and `t:` refs alike; `use_answers_sync` is its twin. `record` and `other` are each a `Record` or a stored document, read through `read_record`. It returns `{"other": h, "findings": [...]}`, `h` the other record's hash. The state entry, the run settings, the cut and every comparison are `record`'s, so the findings are replay's with `other` as the fixture: `not-in-record` and `ref-not-in-record` name what `other` does not hold, and `question-changed` compares against `other`'s identities. A `Failed` call or a returned marker in `other` comes back as replay returns a recorded one. Neither record is edited, and neither's `unhashed` is read.
+
+After both records are read and before any replay it raises `EvaluationRefusal`, `reason` in this order: `invalid-record` when a document does not read, carrying the `InvalidRecord` as `error`; `unfinished` for a record with no `verdict` item, then `nothing-to-replay` for one with no state entry, then `wrong-design` for one whose design hash is not `loaded.design_hash`, each for `record` then `other`; and `different-turn` when the two state entries or `settings` items differ by canonical bytes. `turn` is the refused record's hash, `other`'s for `different-turn`, and `None` for `invalid-record`, which carries `error` instead; every other attribute is `None`. A `loaded` that is not exactly a `LoadedDesign` is an `EntryRefusal`, before either record is read.

@@ -41,7 +41,9 @@ from jurat import (
     Source,
     SourceCall,
     Text,
+    Unasked,
     Unavailable,
+    Unsure,
     When,
     decide_sync,
     load,
@@ -677,6 +679,39 @@ def test_unsupported_is_no_failed_outcome() -> None:
 
     record = ran(failed)
     assert call_of(record)["outcome"]["failed"]["code"] == "invalid-return"
+
+
+MARKERS = (Unavailable, Unasked, Unsure)
+
+
+def passing_tone(r: Any) -> Any:
+    a = r.read("q:tone")
+    if isinstance(a, MARKERS):
+        return a
+    return tone(r)
+
+
+def requiring_tone(r: Any) -> Plan:
+    r.require("d:tone")
+    return Plan("inform", reply="ok")
+
+
+def test_a_rule_passing_an_unsupported_marker_through_writes_it_and_a_require_escalates() -> None:
+    rules = {
+        "tone": Rule(
+            "d:tone", t.label("cold", "warm"), passing_tone, version="1", reads=["q:tone"]
+        ),
+        "other": Rule("d:other", t.boolean, other, version="1", reads=["q:other"]),
+    }
+    policy = Policy(requiring_tone, version="1", reads=["d:tone"])
+    record = ran(unsupported(), load(described(rules=rules, policy=policy)))
+    assert entry(record, "d:tone")["marker"] == {
+        "kind": "Unavailable",
+        "cause": {"code": "unsupported", "refs": ["q:tone"]},
+    }
+    plan = next(i for i in record.log if i["item"] == "plan")
+    assert plan["kind"] == "escalate"
+    assert plan["cause"]["code"] == "required"
 
 
 def test_an_unsupported_turn_replays_with_no_finding() -> None:

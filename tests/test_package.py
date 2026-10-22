@@ -96,9 +96,20 @@ TYPE_CONSTRUCTORS = {
 def test_the_public_names_are_exactly_the_decisions() -> None:
     assert set(jurat.__all__) == {*PUBLIC, "__version__"}
     public = {n for n in vars(jurat) if not n.startswith("_")}
-    # Submodules imported by tests appear as attributes; `types` and `helpers` are public
-    # subpackages outside the engine's API.
-    assert public - {"types", "helpers"} == PUBLIC
+    # Submodules imported by tests appear as attributes; `types`, `helpers` and `evaluation`
+    # are public subpackages outside the engine's API.
+    assert public - {"types", "helpers", "evaluation"} == PUBLIC
+
+
+EVALUATION = {"EvaluationRefusal", "RefusalReason", "use_answers", "use_answers_sync"}
+
+
+def test_jurat_evaluation_exports_exactly_its_jobs_and_refusal() -> None:
+    import jurat.evaluation
+
+    assert "evaluation" not in jurat.__all__
+    assert set(jurat.evaluation.__all__) == EVALUATION
+    assert {n for n in vars(jurat.evaluation) if not n.startswith("_")} == EVALUATION
 
 
 def test_jurat_types_exports_exactly_the_constructors() -> None:
