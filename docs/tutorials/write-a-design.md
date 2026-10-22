@@ -8,7 +8,9 @@ messages offline, and replay the records. You need Python 3.11 or later and jura
 The help desk asks what a message is about, whether it is urgent and which order number it
 quotes, then routes or escalates it. The finished files are in
 `docs/tutorials/write_a_design/`: `helpdesk_design.py` holds the design and
-`helpdesk_run.py` runs it.
+`helpdesk_run.py` runs it. If you installed jurat from a package index, fetch the two
+files from the repository at
+[`docs/tutorials/write_a_design/`](https://github.com/CRSiegfried/jurat/tree/main/docs/tutorials/write_a_design).
 
 Keep the design in its own module and import it from your script, as this example does. A
 component's module is part of the design's hash, so the same design run as the launched
@@ -207,7 +209,8 @@ answers, so no model is needed.
    `load` raises `InvalidDesign` naming every failure. Without `"reader"`, `decide_sync`
    raises `EntryRefusal`. A real binding, such as one over a model provider's API, plugs
    in at the same place, in this mapping. So does `jurat.from_record(record, loaded)`,
-   which answers an oracle's sources from a stored record while the others run live.
+   which answers an oracle's sources from a stored record while the others run live;
+   `record` is a `Record` or a stored document, bytes or parsed, read through `read_record`.
 
 4. Run the driver from its directory:
 
@@ -266,5 +269,7 @@ outside every hash.
 
 3. Each turn prints `replay findings: []`: the same answers rebuilt the same plan.
 
-To compare two models' records of one turn, `jurat.evaluation.use_answers` reruns one
-record with the other's answers and returns replay's findings.
+To compare two models' records of one turn, `jurat.evaluation.use_answers(record, loaded,
+other)` reruns `record` with `other`'s answers. It is async, and `use_answers_sync` is its
+twin. Each record is a `Record` or a stored document. It returns
+`{"other": <other's record hash>, "findings": [...]}`, the findings being replay's.
