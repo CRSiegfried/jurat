@@ -6,6 +6,7 @@ All notable changes to jurat are recorded here. The format follows [Keep a Chang
 
 ### Added
 
+- A tutorial, `docs/tutorials/write-a-design.md`: one offline design taken through `load`, `decide`, the record and replay, its example tested.
 - Label descriptions: a `choice` or `score` label may be `{"name": ..., "description": ...}`, which the design document, the call item and the question's identity hold as declared. `RenderedQuestion.descriptions`, keyword-only, gives each label's description aligned with `labels`, `None` where a label has none. Answers, the answer grid, the lints and the `boundaries` checks read names only.
 - `CallResult.warnings`: the binding's own lines about the call, recorded under the call in `unhashed` and outside every hash. A malformed value is kept in `invalid` and is never a fault.
 - `CallResult.precision`: the decimal places the provider rounds probabilities to, hashed on the call item. A value that is not `None` or an integer from 0 to 17 is `invalid-return` for the whole call.
@@ -69,6 +70,8 @@ All notable changes to jurat are recorded here. The format follows [Keep a Chang
 - `load` refuses decision tables, policy tables, data rules, plan declarations, candidate sets, candidate-valued label sets and grounded declarations.
 - No state carries from one turn to the next.
 
-[Unreleased]: https://github.com/CRSiegfried/jurat/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/CRSiegfried/jurat/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/CRSiegfried/jurat/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/CRSiegfried/jurat/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/CRSiegfried/jurat/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/CRSiegfried/jurat/releases/tag/v0.0.1
