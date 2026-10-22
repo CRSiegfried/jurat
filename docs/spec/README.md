@@ -30,6 +30,8 @@ An exception's `traceback` in `unhashed` is still CPython's text. It is built as
 
 ## The binding protocol
 
+A binding receives a batch's sources in source id order, and each source's refs and questions in the code-point order of their refs. That order is part of the contract: a provider may answer a question differently under another order or beside other questions, so the order is part of what ran, as the wording is. A binding for such a provider may ask one question per request or frame its own order, and names that method in `elicitation`.
+
 A `choice` or `score` label is a name or exactly `{"name": n, "description": d}`. Both are strings; the description holds a character that is not whitespace and has no slots. Names are distinct; descriptions may repeat. A candidate-valued set's `fixed` part takes the same form. `noul` and `extraction` declare no labels. Load's count bound counts labels; its code-point bound sums names and descriptions. The answer grid, the lints, load's `boundaries` checks and every answer read label names alone. The design document, the question's identity and the call item's `questions` hold the labels as declared, so a description change makes a new question identity.
 
 `RenderedQuestion.labels` holds the names. `descriptions`, keyword-only, is aligned with them: `None` where a label is undescribed, `(None, None)` for `noul`, `()` for `extraction`. A `RenderedQuestion` built with none gets `None` for each label; a non-empty value is kept as given, unchecked.
