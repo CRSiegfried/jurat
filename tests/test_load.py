@@ -2135,3 +2135,29 @@ def test_a_provides_mappings_type_is_loaded_as_its_string_data() -> None:
     object.__setattr__(source, "provides", {"t:x": {"type": Name("string"), "candidates": False}})
     loaded = load(with_source(minimal(), "s", source))
     assert type(loaded._design.sources["s"].provides["t:x"]["type"]) is str
+
+
+@pytest.mark.parametrize(
+    ("design", "says"),
+    [
+        (minimal(state="list<string>"), "the state declaration is list<string>, not a record"),
+        (
+            minimal(types={"names": t.list_(t.string)}, state="names"),
+            "the state declaration is names, not a record",
+        ),
+        (
+            minimal(parameters={"p": Parameter(t.record(a=t.number()), {"a": 1})}),
+            'parameter "p"\'s type is record{a: number}, not a scalar',
+        ),
+        (
+            minimal(
+                types={"pair": t.record(a=t.number())},
+                parameters={"p": Parameter("pair", {"a": 1})},
+            ),
+            'parameter "p"\'s type is pair, not a scalar',
+        ),
+    ],
+)
+def test_check_10_a_type_refusal_names_the_type_as_written(design: Design, says: str) -> None:
+    found = only(design, 10)
+    assert any(says in f.message for f in found), found

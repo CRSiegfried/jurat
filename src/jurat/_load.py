@@ -233,6 +233,7 @@ class _Loader:
         self.ref_sizes: dict[str, int] = {}
         self.types: dict[str, Type] = {}
         self.leaf_types: dict[str, Type] = {}
+        self.leaf_written: dict[str, Type] = {}  # each leaf's type as declared, for messages
         self.state_type: Type | None = None
         self.class_keys: list[tuple[str, _ParsedRef]] = []  # each classes key check 7 passed
         # Each leaf check 8 refuses under a boundaries field, left out of check 9's boundaries
@@ -762,7 +763,9 @@ class _Loader:
             if isinstance(resolve(state, self.defs), RecordOf):
                 self.state_type = state
             else:
-                self.fail(10, (_STATE,), "the state declaration is not a record type")
+                self.fail(
+                    10, (_STATE,), f"the state declaration is {render(state)}, not a record type"
+                )
         for sid, source in self.sources():
             for ref, provided in source.provides.items():
                 # A ref check 7 refuses is left out; its declaration is still checked.
@@ -827,11 +830,12 @@ class _Loader:
                 self.fail(
                     10,
                     (path,),
-                    f"parameter {_q(path)}'s type is not a scalar, a list of one or a mapping "
-                    "of one",
+                    f"parameter {_q(path)}'s type is {render(t)}, not a scalar, a list of one "
+                    "or a mapping of one",
                 )
                 continue
             self.leaf_types[path] = full
+            self.leaf_written[path] = t
             if self.parsed is not None and value_conforms(leaf.value, full, {}, form="document"):
                 self.live[path] = live_value(leaf.value, full)
 
@@ -903,8 +907,8 @@ class _Loader:
                 self.fail(
                     8,
                     (owner, path),
-                    f"{where} names {_q(path)}, whose type does not conform to number or "
-                    "mapping<string, number>",
+                    f"{where} names {_q(path)}, whose type is {render(self.leaf_written[path])}, "
+                    "which does not conform to number or mapping<string, number>",
                 )
 
     # --- check 9 ---------------------------------------------------------------------------
@@ -981,7 +985,7 @@ class _Loader:
                         9,
                         names,
                         f"{where}: {_q(key)} is neither a q: read nor of a type that conforms "
-                        "to number",
+                        f"to number: its type is {render(t)}",
                     )
                 for path in self.typed(cast("list[str]", entry)):
                     self.bound(owner, where, path, self.leaf_types[path], _NUMBER, "number")
@@ -1060,7 +1064,12 @@ class _Loader:
 
     def bound(self, owner: str, where: str, path: str, t: Type, to: Type, shown: str) -> None:
         if not conforms(t, to, {}):
-            self.fail(9, (owner, path), f"{where}: {_q(path)}'s type does not conform to {shown}")
+            self.fail(
+                9,
+                (owner, path),
+                f"{where}: {_q(path)}'s type is {render(self.leaf_written[path])}, which does not "
+                f"conform to {shown}",
+            )
 
     def question(self, ref: str) -> Question:
         """The question that provides a ``q:`` ref; checks 3 and 4 have passed."""

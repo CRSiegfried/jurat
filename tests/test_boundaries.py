@@ -368,3 +368,42 @@ def test_a_read_whose_boundaries_name_no_leaf_has_no_grid_entry() -> None:
     assert EMAIL not in load(route_with({EMAIL: empty_mass}))._grid
     doc = decode(load(design).document)["rules"]["route"]["boundaries"]
     assert doc == {"d:score": [], EMAIL: roles(), "t:profile.age": []}
+
+
+def with_count_leaf(design: Design) -> Design:
+    """``design`` with a ``count`` definition of ``integer`` and a leaf ``n/count`` of it."""
+    design = dataclasses.replace(design, types={**design.types, "count": t.integer()})
+    return with_leaf(design, "n/count", "count", 3)
+
+
+@pytest.mark.parametrize(
+    ("design", "check", "says"),
+    [
+        (
+            route_with({"d:score": ["mood"]}),
+            8,
+            'names "mood", whose type is label{"calm", "wild"}, which does not conform to '
+            "number or mapping<string, number>",
+        ),
+        (
+            route_with({"t:lookup": ["score/cut"]}),
+            9,
+            "nor of a type that conforms to number: its type is string",
+        ),
+        (
+            route_with({EMAIL: roles(bar=["score/cut"])}),
+            9,
+            '"score/cut"\'s type is number, which does not conform to number [0, 1]',
+        ),
+        (
+            with_count_leaf(route_with({EMAIL: roles(margin=["n/count"])})),
+            9,
+            '"n/count"\'s type is count, which does not conform to number [0, 1]',
+        ),
+    ],
+)
+def test_a_boundary_type_refusal_names_the_type_as_written(
+    design: Design, check: int, says: str
+) -> None:
+    found = only(design, check)
+    assert any(says in f.message for f in found), found
