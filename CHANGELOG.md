@@ -4,6 +4,8 @@ All notable changes to jurat are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-22
+
 ### Added
 
 - The `extraction` answer kind: a question that asks for a typed value read from a text. `Question` takes `value_type`, `is_list`, `text` and `reference_date`; `ValueType` names the six value types; `ExtractionAnswer` holds the answer's `value`, `guess`, `p_null`, `confidence` and `span`, and checks each when built. Dates, times, datetimes and durations are checked by jurat's own grammar, alike on every Python.
