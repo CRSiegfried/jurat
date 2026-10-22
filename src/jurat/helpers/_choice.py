@@ -10,7 +10,7 @@ as ``Fraction(repr(x))``.
 from fractions import Fraction
 from typing import cast
 
-from jurat._answer import Answer
+from jurat._answer import Answer, ExtractionAnswer
 from jurat._markers import Cause, CauseCode, Undetermined, Unsure
 from jurat._read_view import ReadView
 from jurat._values import quote
@@ -156,3 +156,22 @@ def mass(r: ReadView, ref: str, labels: list[str] | tuple[str, ...]) -> float | 
         total = sum((exact(answer.probabilities[label]) for label in labels_), Fraction(0))
         call.rested_on([ref])
         return 1.0 if total > 1 else float(total)
+
+
+def extract(r: ReadView, ref: str, null_bar: float) -> object:
+    """The ``value`` of the extraction answer at ``ref``, a list when its question asks for a
+    list; ``Unsure`` with ``abstained`` naming ``ref`` when ``value`` is ``None``, or when
+    ``p_null`` is not ``None`` and at or above ``null_bar``. A ``None`` ``p_null`` does not
+    abstain, and ``guess`` is never returned. A marker read is returned unchanged."""
+    with called(r, "extract", [ref]) as call:
+        (value,) = call.values
+        bar = _unit("extract", "null_bar", null_bar)
+        if isinstance(value, Undetermined):
+            call.rested_on([ref])
+            return value
+        if type(value) is not ExtractionAnswer:
+            raise TypeError(f"extract read {quote(ref)}, which holds no extraction answer")
+        call.rested_on([ref])
+        if value.value is None or (value.p_null is not None and exact(value.p_null) >= bar):
+            return Unsure(Cause(CauseCode.abstained, [ref]))
+        return list(value.value) if value.is_list else value.value

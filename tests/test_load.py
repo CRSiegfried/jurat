@@ -77,7 +77,7 @@ def src_hash(fn: Callable[..., Any]) -> str:
 def test_a_minimal_design_writes_every_member_with_its_default() -> None:
     loaded = load(minimal())
     assert decode(loaded.document) == {
-        "format": 1,
+        "format": 2,
         "name": None,
         "state": "record{}",
         "sources": {},

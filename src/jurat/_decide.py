@@ -39,11 +39,18 @@ from jurat._markers import Cause, CauseCode, PlanKind
 from jurat._plan import Plan, engine_plan
 from jurat._refs import code_point_sorted
 from jurat._typed import is_a, typed
-from jurat._values import MAX_INTEGER, UNREPRESENTABLE, described, quote, string_data, type_name
+from jurat._values import (
+    FORMAT,
+    MAX_INTEGER,
+    UNREPRESENTABLE,
+    described,
+    quote,
+    string_data,
+    type_name,
+)
 from jurat.helpers import HELPERS
 
 _ENGINE = version("jurat")
-_FORMAT = 1
 _STATE = "t:state"
 _CODEC = "codec"
 _DEFAULT = "default"
@@ -321,7 +328,7 @@ async def _turn(
         if codec is not None:
             ledger.write_unhashed("codec", _codec_name(codec))
         ledger.append(
-            {"item": "design", "hash": loaded.design_hash, "format": _FORMAT, "helpers": HELPERS}
+            {"item": "design", "hash": loaded.design_hash, "format": FORMAT, "helpers": HELPERS}
         )
         ledger.append(
             {

@@ -33,7 +33,18 @@ from jurat import (
 from jurat import types as t
 from jurat._canonical import decode, encode
 from jurat._values import MAX_DOCUMENT_DEPTH
-from ledger_logs import DESIGN, LOGS, NORMAL, SETTINGS, STATE, call, entry, fresh, round_item
+from ledger_logs import (
+    DESIGN,
+    LOGS,
+    NORMAL,
+    SETTINGS,
+    STATE,
+    call,
+    entry,
+    fresh,
+    round_item,
+    unhashed_of,
+)
 
 ROOT = bytes(range(32))
 
@@ -541,8 +552,11 @@ PREFIXES = [(name, n) for name, log in LOGS.items() for n in range(1, len(log) +
 
 @pytest.mark.parametrize(("name", "n"), PREFIXES, ids=[f"{name}-{n}" for name, n in PREFIXES])
 def test_every_prefix_of_the_test_logs_redacts_and_escalates(name: str, n: int) -> None:
-    record = read(fresh(LOGS[name][:n]))
+    record = read(fresh(LOGS[name][:n]), unhashed_of(name, n))
     out = view(record)
+    for key, keyed in record.unhashed.get("calls", {}).items():
+        if "truncated" in keyed:  # declared refs, open
+            assert out["unhashed"]["calls"][key]["truncated"] == keyed["truncated"]
     assert out["redacted"] == record.record_hash
     assert len(out["log"]) == n
     escalation(record)

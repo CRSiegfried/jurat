@@ -9,7 +9,7 @@ the rerun differs. The core imports only the standard library.
 
 from importlib.metadata import version as _version
 
-from jurat._answer import Answer, AnswerKind
+from jurat._answer import Answer, AnswerKind, ExtractionAnswer, ValueType
 from jurat._binding import CallResult, RenderedQuestion, SourceCall
 from jurat._decide import Decision, EntryRefusal, RunSettings, decide, decide_sync
 from jurat._design import (
@@ -62,6 +62,7 @@ __all__ = [
     "Design",
     "DesignFailure",
     "EntryRefusal",
+    "ExtractionAnswer",
     "Failed",
     "FindingKind",
     "Group",
@@ -92,6 +93,7 @@ __all__ = [
     "Unavailable",
     "Undetermined",
     "Unsure",
+    "ValueType",
     "Verdict",
     "VerdictKind",
     "When",

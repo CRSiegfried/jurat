@@ -12,17 +12,26 @@ from collections.abc import Awaitable, Callable
 from dataclasses import KW_ONLY, dataclass
 from typing import Any
 
-from jurat._answer import AnswerKind
+from jurat._answer import AnswerKind, ValueType
 
 
 @dataclass(frozen=True, slots=True)
 class RenderedQuestion:
     """A ``q:`` ref's question as asked: its kind, the filled wording and its labels in order,
-    ``yes`` and ``no`` for ``noul``."""
+    ``yes`` and ``no`` for ``noul`` and none for ``extraction``. An extraction question also
+    gives, keyword-only, its ``value_type``, ``is_list``, ``text``, the ``needs`` key holding the
+    text its spans index, and ``reference_date``, the rendered date the model resolves a date
+    written without a year against, or ``None`` when the question declares none; a probability
+    kind's question leaves them at ``None``, ``False``, ``None`` and ``None``."""
 
     kind: AnswerKind
     wording: str
     labels: tuple[str, ...]
+    _: KW_ONLY
+    value_type: ValueType | None = None
+    is_list: bool = False
+    text: str | None = None
+    reference_date: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,8 +51,11 @@ class SourceCall:
 @dataclass(frozen=True, slots=True)
 class CallResult:
     """What a binding returns for its batch: ``values``, a ``dict`` from each ref the batch
-    provides to its value, a ``q:`` ref's a ``dict`` from label to probability, and the
-    call's provenance, null when no model was called."""
+    provides to its value, a ``q:`` ref's a ``dict`` from label to probability or, for an
+    extraction question, exactly the keys ``value``, ``guess``, ``p_null``, ``confidence`` and
+    ``span``; the call's provenance, null when no model was called; and ``truncated``, the
+    ``q:`` refs whose answer came from a response the provider cut short, kept outside every
+    hash."""
 
     values: dict[str, Any]
     _: KW_ONLY
@@ -52,6 +64,7 @@ class CallResult:
     prompt: str | None = None
     usage: dict[str, float] | None = None
     attempts: int | None = None
+    truncated: tuple[str, ...] = ()
 
 
 OracleBinding = Callable[[tuple[SourceCall, ...]], Awaitable[object]]

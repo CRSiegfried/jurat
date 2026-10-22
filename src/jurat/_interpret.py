@@ -19,8 +19,9 @@ the sorter is drained. The budget is tested before a frontier is asked, then the
 deadline, which is tested again when the frontier's task group closes; under replay the recorded cut
 stands in for the clock.
 
-Two boards: the live one the views and the needs read holds an ``Answer`` for a ``q:`` ref
-and Python ``bytes`` for a ``bytes`` value; the ledger is handed plain data.
+Two boards: the live one the views and the needs read holds an ``Answer`` or an
+``ExtractionAnswer`` for a ``q:`` ref and Python ``bytes`` for a ``bytes`` value; the ledger is
+handed plain data.
 """
 
 import asyncio
@@ -30,7 +31,17 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import Any, cast
 
-from jurat._answer import Answer, AnswerKind, answer_document, off_sum
+from jurat._answer import (
+    EXTRACTION_MEMBERS,
+    Answer,
+    AnswerKind,
+    ExtractionAnswer,
+    ValueType,
+    answer_document,
+    extraction_document,
+    off_sum,
+    span_bound,
+)
 from jurat._binding import CallResult, OracleBinding, RenderedQuestion, SourceCall
 from jurat._canonical import decode, encode, hash_value
 from jurat._component import Called, at, base, call, exception_record, names_read, now
@@ -224,6 +235,8 @@ class _Batch:
     """Each asked ``q:`` ref's declared question."""
     labels: dict[str, tuple[str, ...]]
     """The labels each ``q:`` ref was passed with."""
+    texts: dict[str, int]
+    """Each extraction ``q:`` ref's text length in code points, which its spans index."""
     call: tuple[SourceCall, ...]
     timeout: float
     cost: Fraction
@@ -242,6 +255,8 @@ class _Judged:
     invalid: dict[str, str] = field(default_factory=dict[str, str])
     sums: dict[str, float] = field(default_factory=dict[str, float])
     """Each answer's sum, rounded once, where it lies off 1 by more than the flag allows."""
+    truncated: list[str] = field(default_factory=list[str])
+    """The ``q:`` refs the binding reported cut short, in code-point order."""
 
 
 def _judge(batch: _Batch, returned: _Returned, types: Mapping[str, Type]) -> _Judged:
@@ -293,6 +308,9 @@ def _judge(batch: _Batch, returned: _Returned, types: Mapping[str, Type]) -> _Ju
                 codes.append(_C.invalid_return)
         judged.usage = _usage(cast(object, getattr(result, "usage", None)), judged.invalid)
         judged.attempts = _attempts(cast(object, getattr(result, "attempts", None)), judged.invalid)
+        judged.truncated = _truncated(
+            cast(object, getattr(result, "truncated", ())), batch, judged.invalid
+        )
     else:
         codes.append(_C.invalid_return)
     if codes:
@@ -307,9 +325,9 @@ def _judge(batch: _Batch, returned: _Returned, types: Mapping[str, Type]) -> _Ju
         else:
             written = _returned_value(ref, given[ref], batch, types)
             judged.written[ref] = written
-            if ref in batch.questions and type(written) is tuple:
+            if type(written) is tuple and type(written[1]) is Answer:
                 # The flag changes no outcome: the answer is written as returned.
-                total = off_sum(cast(Answer, written[1]))
+                total = off_sum(written[1])
                 if total is not None:
                     judged.sums[ref] = total
     return judged
@@ -321,6 +339,8 @@ def _returned_value(ref: str, value: object, batch: _Batch, types: Mapping[str, 
         return _binding_marker(ref, value)
     if ref in batch.questions:
         kind = AnswerKind(batch.questions[ref].kind)
+        if kind is AnswerKind.extraction:
+            return _extraction(ref, value, batch)
         try:
             built = Answer(kind, batch.labels[ref], cast("dict[str, float]", value))
         except ValueError:
@@ -328,6 +348,47 @@ def _returned_value(ref: str, value: object, batch: _Batch, types: Mapping[str, 
         return answer_document(built), built
     forms = typed(value, types[ref])
     return Unavailable(Cause(_C.invalid_return, [ref])) if forms is None else forms
+
+
+def _extraction(ref: str, value: object, batch: _Batch) -> Written:
+    """An extraction answer built from exactly the five members the binding returned, its span
+    within its text and its document within the value domain; else ``invalid-answer``."""
+    invalid = Unavailable(Cause(_C.invalid_answer, [ref]))
+    if type(value) is not dict:
+        return invalid
+    members: dict[str, object] = {}
+    for key, member in cast("dict[object, object]", value).items():
+        name = string_data(cast(str, key)) if is_a(key, str) else None
+        if name is None or name in members:
+            return invalid
+        members[name] = member
+    if set(members) != set(EXTRACTION_MEMBERS):
+        return invalid
+    q = batch.questions[ref]
+    try:
+        built = ExtractionAnswer(ValueType(q.value_type), q.is_list, **cast(Any, members))
+    except ValueError:
+        return invalid
+    if span_bound(built) > batch.texts[ref]:
+        return invalid
+    document = extraction_document(built)
+    if domain_error(document) is not None:  # the size bounds: load bounds no extraction answer
+        return invalid
+    return document, built
+
+
+def _truncated(value: object, batch: _Batch, invalid: dict[str, str]) -> list[str]:
+    """A ``truncated`` of exactly a tuple of distinct exact ``str``, each exactly a question
+    ref of the batch, in code-point order; else nothing, with the value kept in
+    ``invalid``."""
+    if type(value) is tuple:
+        members = cast("tuple[object, ...]", value)
+        refs = [m for m in members if type(m) is str and domain_error(m) is None]
+        distinct = len(refs) == len(members) and len(set(refs)) == len(refs)
+        if distinct and all(m in batch.questions for m in refs):
+            return code_point_sorted(refs)
+    invalid["truncated"] = guarded_repr(cast(object, value))
+    return []
 
 
 def _binding_marker(ref: str, value: object) -> Unavailable:
@@ -615,6 +676,8 @@ class _Turn:
                 unhashed["invalid"] = judged.invalid
             if judged.sums:
                 unhashed["sums"] = judged.sums
+            if judged.truncated:
+                unhashed["truncated"] = judged.truncated
             self.ledger.write_unhashed("calls", unhashed, index)
             if outcome.error is not None:
                 self.ledger.write_unhashed("exceptions", exception_record(outcome.error), index)
@@ -764,6 +827,7 @@ class _Turn:
         refs: list[str] = []
         questions: dict[str, Question] = {}
         labels: dict[str, tuple[str, ...]] = {}
+        texts: dict[str, int] = {}
         calls: list[SourceCall] = []
         for sid in sids:
             source = self.sources[sid]
@@ -778,9 +842,13 @@ class _Turn:
                 q = source.provides[ref]
                 if isinstance(q, Question):
                     kind = AnswerKind(q.kind)
+                    wording = _render(q.wording.template, self.slot_values(q, needs))
+                    if kind is AnswerKind.extraction:
+                        questions[ref], labels[ref] = q, ()
+                        rendered[ref] = self.extraction(ref, q, wording, needs, texts)
+                        continue
                     passed = _NOUL_LABELS if kind is AnswerKind.noul else tuple(cast(Any, q.labels))
                     questions[ref], labels[ref] = q, passed
-                    wording = _render(q.wording.template, self.slot_values(q, needs))
                     rendered[ref] = RenderedQuestion(kind, wording, passed)
             t_refs = tuple(ref for ref in provided if ref not in rendered)
             calls.append(SourceCall(sid, self.loaded._payload(sid), needs, t_refs, rendered))
@@ -793,10 +861,35 @@ class _Turn:
             refs=tuple(code_point_sorted(refs)),
             questions=questions,
             labels=labels,
+            texts=texts,
             call=tuple(calls),
             # The largest declared, else the run setting's.
             timeout=max(declared) if declared else self.timeout,
             cost=sum((_exact(self.sources[sid].cost) for sid in sids), Fraction(0)),
+        )
+
+    def extraction(
+        self,
+        ref: str,
+        q: Question,
+        wording: str,
+        needs: Mapping[str, object],
+        texts: dict[str, int],
+    ) -> RenderedQuestion:
+        """An extraction question as asked: the needs key of its text, whose length its spans
+        are bounded by, and its reference date rendered; load added both refs to the needs and
+        typed them exactly ``string``."""
+        text = cast("Mapping[str, str]", q.text)["ref"]
+        texts[ref] = len(cast(str, needs[text]))
+        date = None if q.reference_date is None else _text(needs[q.reference_date["ref"]])
+        return RenderedQuestion(
+            AnswerKind.extraction,
+            wording,
+            (),
+            value_type=ValueType(q.value_type),
+            is_list=q.is_list,
+            text=text,
+            reference_date=date,
         )
 
     def slot_values(self, q: Question, needs: Mapping[str, object]) -> dict[str, object]:
@@ -853,13 +946,16 @@ class _Turn:
     def call_item(self, batch: _Batch, judged: _Judged, n: int) -> dict[str, object]:
         questions: dict[str, object] = {}
         for ref in code_point_sorted(batch.questions):
-            # The kind and labels are those the identity hashes.
+            # The kind and labels, or value type and list flag, are those the identity hashes.
             declared = self.document[self.loaded._providers[ref]]["provides"][ref]
-            questions[ref] = {
+            asked: dict[str, object] = {
                 "identity": self.identity(ref),
                 "kind": declared["kind"],
                 "labels": declared["labels"],
             }
+            if declared["kind"] == AnswerKind.extraction:
+                asked.update(value_type=declared["value_type"], is_list=declared["is_list"])
+            questions[ref] = asked
         failed = judged.failed
         outcome: object = (
             "returned"

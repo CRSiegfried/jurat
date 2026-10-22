@@ -14,11 +14,13 @@ import re
 from collections.abc import Callable, Mapping
 from typing import Any, cast
 
-from jurat._answer import AnswerKind
+from jurat._answer import PROBABILITY_KINDS, AnswerKind, ValueType
 from jurat._canonical import decode, encode, record_hash
 from jurat._markers import CauseCode, MarkerKind, OutcomeKind, PlanKind, VerdictKind
 from jurat._refs import declared_ref, parse_ref
 from jurat._values import (
+    EXTRACTION_FORMAT,
+    FORMATS,
     MAX_DEPTH,
     MAX_DOCUMENT_DEPTH,
     MAX_INTEGER,
@@ -262,6 +264,8 @@ def _cause(value: Any, where: str) -> None:
 _STATE = "t:state"
 _CAUSE_CODES = frozenset(c.value for c in CauseCode)
 _ANSWER_KINDS = frozenset(AnswerKind)
+_PROBABILITY_KINDS = frozenset(k.value for k in PROBABILITY_KINDS)
+_VALUE_TYPES = frozenset(v.value for v in ValueType)
 _PLAN_KINDS = frozenset(PlanKind)
 _VERDICT_KINDS = frozenset(VerdictKind)
 _MARKER_KINDS = frozenset(k.value for k in MarkerKind)
@@ -294,11 +298,20 @@ def _questions(value: Any, where: str) -> None:
         if parsed.fields:
             raise _LedgerError(f"{where} has the key {ref!r}, which has a field path")
         at = f"{where}[{ref!r}]"
-        q = _members(question, at, {"identity": _STR, "kind": _STR, "labels": _ANY})
+        kind = member_named(cast(object, question), "kind")
+        if kind == AnswerKind.extraction:
+            q = _members(question, at, _EXTRACTION_QUESTION)
+        else:
+            q = _members(question, at, {"identity": _STR, "kind": _STR, "labels": _ANY})
         kind, labels = q["kind"], q["labels"]
         if kind not in _ANSWER_KINDS:
-            raise _LedgerError(f"{at}'s kind {kind!r} is not noul, choice or score")
-        if kind == AnswerKind.noul:
+            raise _LedgerError(f"{at}'s kind {kind!r} is not noul, choice, score or extraction")
+        if kind == AnswerKind.extraction:
+            if labels is not None:
+                raise _LedgerError(f"{at}'s labels are not null, as an extraction's are")
+            if q["value_type"] not in _VALUE_TYPES:
+                raise _LedgerError(f"{at}'s value_type {q['value_type']!r} is not one of the six")
+        elif kind == AnswerKind.noul:
             if labels is not None:
                 raise _LedgerError(f"{at}'s labels are not null, as noul's are")
         elif type(cast(object, labels)) is dict and kind == AnswerKind.choice:
@@ -321,11 +334,40 @@ def _sources(value: Any, where: str) -> None:
 
 
 def _answer(value: Any, where: str) -> None:
-    """An answer's shape: no label or probability is tested, which
-    interpret's answer check does under replay as on a live turn."""
+    """An answer's shape: no label, probability, range, grammar or span bound is tested,
+    which interpret's answer check does under replay as on a live turn."""
+    if member_named(cast(object, value), "kind") == AnswerKind.extraction:
+        m = _members(value, where, _EXTRACTION_ANSWER)
+        if m["value_type"] not in _VALUE_TYPES:
+            raise _LedgerError(f"{where}'s value_type {m['value_type']!r} is not one of the six")
+        return
     m = _members(value, where, {"kind": _STR, "labels": _STRINGS, "probabilities": _OBJECT})
-    if m["kind"] not in _ANSWER_KINDS:
+    if m["kind"] not in _PROBABILITY_KINDS:
         raise _LedgerError(f"{where}'s kind {m['kind']!r} is not noul, choice or score")
+
+
+def _is_member_value(v: Any) -> bool:
+    """An extraction ``value`` or ``guess``: null, a string, a number, or a list of those."""
+    if v is None or type(v) is str or _is_number(v):
+        return True
+    return type(v) is list and all(
+        type(m) is str or _is_number(m) or m is None for m in cast("list[Any]", v)
+    )
+
+
+def _is_pair(v: Any) -> bool:
+    return (
+        type(v) is list
+        and len(cast("list[Any]", v)) == 2
+        and all(map(_is_int, cast("list[Any]", v)))
+    )
+
+
+def _is_span(v: Any) -> bool:
+    """An extraction ``span``: null, a list of two integers, or a list of such lists."""
+    if v is None or _is_pair(v):
+        return True
+    return type(v) is list and all(_is_pair(p) for p in cast("list[Any]", v))
 
 
 def _run_settings(value: Any, where: str) -> None:
@@ -439,6 +481,24 @@ def _then_kind(kinds: frozenset[str], what: str, shape: _Check) -> _Check:
 
     return check
 
+
+_EXTRACTION_ANSWER: dict[str, _Check] = {
+    "kind": _STR,
+    "value_type": _STR,
+    "is_list": _BOOL,
+    "value": _kind(_is_member_value, "null, a string, a number or a list of those"),
+    "guess": _kind(_is_member_value, "null, a string, a number or a list of those"),
+    "p_null": _NUMBER_OR_NULL,
+    "confidence": _NUMBER_OR_NULL,
+    "span": _kind(_is_span, "null, a list of two integers or a list of such lists"),
+}
+_EXTRACTION_QUESTION: dict[str, _Check] = {
+    "identity": _STR,
+    "kind": _STR,
+    "labels": _ANY,
+    "value_type": _STR,
+    "is_list": _BOOL,
+}
 
 _SHAPES: dict[str, _Check] = {
     "design": _shape({"hash": _STR, "format": _INT, "helpers": _INT}),
@@ -608,7 +668,9 @@ def _misfit(value: Any, tree: Any, where: str) -> str | None:
 # unhashed shapes
 
 _KEYED = frozenset({"calls", "exceptions", "reads"})
-_INVALID_NAMES = frozenset({"code", "snapshot", "elicitation", "prompt", "usage", "attempts"})
+_INVALID_NAMES = frozenset(
+    {"code", "snapshot", "elicitation", "prompt", "usage", "attempts", "truncated"}
+)
 _NUMBERS = _kind(
     lambda v: type(v) is dict and all(_is_number(n) for n in cast("dict[str, Any]", v).values()),
     "an object of numbers",
@@ -639,6 +701,20 @@ def _sums(value: Any, where: str) -> None:
         _NUMBER(number, f"{where}[{clipped(key)}]")
 
 
+def _truncated(value: Any, where: str) -> None:
+    """The refs a binding reported cut short: a non-empty list of strings, distinct and in
+    code-point order."""
+    _STRINGS(value, where)
+    if not value:
+        raise _LedgerError(f"{where} is empty; an empty member is not written")
+    for before, after in itertools.pairwise(cast("list[str]", value)):
+        if before >= after:
+            raise _LedgerError(
+                f"{where}: {clipped(before)}, {clipped(after)} are not distinct and in code-point "
+                "order"
+            )
+
+
 def _call_entry(value: Any, where: str) -> None:
     _members(
         value,
@@ -649,28 +725,31 @@ def _call_entry(value: Any, where: str) -> None:
             "usage": _or_null(_NUMBERS),
             "attempts": _INT_OR_NULL,
         },
-        {"unexpected": _unexpected, "invalid": _invalid, "sums": _sums},
+        {"unexpected": _unexpected, "invalid": _invalid, "sums": _sums, "truncated": _truncated},
     )
 
 
-def _sums_keys(entry: dict[str, Any], questions: frozenset[str], where: str) -> None:
-    """Refuse a ``sums`` key that names no key of its call item's ``questions``, looked up
-    with any grounded bracket removed, and in v0.0.1 a grounded one. The entry has passed its
-    shape check."""
-    for key in cast("dict[str, Any]", entry.get("sums", {})):
+def _sums_keys(entry: dict[str, Any], questions: Mapping[str, str], where: str) -> None:
+    """Refuse a ``sums`` key or a ``truncated`` ref that names no key of its call item's
+    ``questions``, looked up with any grounded bracket removed, and in v0.0.1 a grounded one.
+    The entry has passed its shape check."""
+    named = [("sums", key) for key in cast("dict[str, Any]", entry.get("sums", {}))]
+    named += [("truncated", ref) for ref in cast("list[str]", entry.get("truncated", []))]
+    for member, key in named:
         try:
             found = declared_ref(key) in questions
         except ValueError:  # not a ref
             found = False
+        what = "key" if member == "sums" else "ref"
         if not found:
             raise _LedgerError(
-                f"{where}'s 'sums' has the key {clipped(key)}, which names no key of its call "
-                "item's questions"
+                f"{where}'s {member!r} has the {what} {clipped(key)}, which names no key of its "
+                "call item's questions"
             )
         if _grounded(key):
             raise _LedgerError(
-                f"{where}'s 'sums' key {clipped(key)} is a grounded ref, which a v0.0.1 record "
-                "holds nowhere"
+                f"{where}'s {member!r} {what} {clipped(key)} is a grounded ref, which a v0.0.1 "
+                "record holds nowhere"
             )
 
 
@@ -695,7 +774,11 @@ _INDEX_KEY = re.compile(r"0|[1-9][0-9]*")
 
 
 def _check_unhashed(
-    member: str, value: Any, kinds: list[str], questions: Mapping[int, frozenset[str]]
+    member: str,
+    value: Any,
+    kinds: list[str],
+    questions: Mapping[int, Mapping[str, str]],
+    fmt: int,
 ) -> None:
     """Refuse a known ``unhashed`` member whose shape is not the observer's, or a key of a keyed
     member that is not a decimal log index naming an item of ``kinds``, the log's item kinds
@@ -724,6 +807,12 @@ def _check_unhashed(
                 )
             _KEYED_ENTRY[member](entry, f"{where}[{key!r}]")
             if member == "calls":
+                if fmt < EXTRACTION_FORMAT and (
+                    "truncated" in entry or "truncated" in entry.get("invalid", {})
+                ):
+                    raise _LedgerError(
+                        f"{where}[{key!r}] holds truncated, which a format-{fmt} record does not"
+                    )
                 _sums_keys(entry, questions[index], f"{where}[{key!r}]")
 
 
@@ -765,7 +854,8 @@ class Ledger:
         self._round_bound = 0
         self._cut: int | None = None  # the round whose round item has deadline true
         self._sources: dict[str, int] = {}  # each listed source id, by its call item's index
-        self._questions: dict[int, frozenset[str]] = {}  # each call item's questions keys
+        self._questions: dict[int, dict[str, str]] = {}  # each call item's questions' kinds
+        self._format = 0  # the design item's format, which the rest of the log is read under
         self._written: set[str] = set()
         self._node: tuple[object, ...] | None = None
         self._node_last = ""
@@ -851,7 +941,10 @@ class Ledger:
                 "at a broken entry the plan item, or at a cancellation the cause item"
             )
         if kind == "design":
-            return self._set(_phase=_DESIGNED)
+            fmt = item["format"]
+            if fmt not in FORMATS:
+                raise _LedgerError(f"{where}: the format {fmt} is not one this ledger knows")
+            return self._set(_phase=_DESIGNED, _format=fmt)
         if kind == "settings":
             return self._settings(item)
         if kind == "verdict":
@@ -938,7 +1031,15 @@ class Ledger:
             if has_entry:
                 raise _LedgerError(f"{where}: a call item comes before the entries of its round")
             sources = tuple(self._call_sources(item, where))  # not the copy the observer sees
-            asked = frozenset(cast("dict[str, Any]", item["questions"]))
+            asked = {
+                ref: cast(str, q["kind"])
+                for ref, q in cast("dict[str, dict[str, Any]]", item["questions"]).items()
+            }
+            if self._format < EXTRACTION_FORMAT and AnswerKind.extraction in asked.values():
+                raise _LedgerError(
+                    f"{where}: its questions hold an extraction question, which a "
+                    f"format-{self._format} record does not"
+                )
             questions = self._questions
 
             def kept() -> None:
@@ -961,11 +1062,37 @@ class Ledger:
             call = item["call"]
             if call is not None and call not in calls:
                 raise _LedgerError(f"{where}: its call {call} names no call item of round {n}")
+            self._asked(item, None if call is None else self._questions[call], where)
             state["_round_has_entry"] = True
             entry_state, entry_grows = self._entry(item, where)
             state.update(entry_state)
             grows += entry_grows
         return self._set(*grows, **state)
+
+    def _asked(self, item: dict[str, Any], questions: Mapping[str, str] | None, where: str) -> None:
+        """A ``q:`` entry naming a call item names a question of it; a value entry's answer is
+        of a kind its format has and, naming a call item, of the kind that question gives."""
+        ref: str = item["ref"]
+        try:
+            parsed = parse_ref(ref)
+        except ValueError:  # not a ref: _entry refuses it with its own message
+            return
+        if parsed.level != "q":
+            return
+        kind = item["value"]["kind"] if "value" in item else None
+        if self._format < EXTRACTION_FORMAT and kind == AnswerKind.extraction:
+            raise _LedgerError(
+                f"{where}: an extraction answer, which a format-{self._format} record does not hold"
+            )
+        if questions is None:
+            return
+        key = declared_ref(ref)
+        if key not in questions:
+            raise _LedgerError(f"{where}: {key!r} is not a question of its call item")
+        if kind is not None and kind != questions[key]:
+            raise _LedgerError(
+                f"{where}: its answer's kind {kind!r} is not its question's, {questions[key]!r}"
+            )
 
     def _call_sources(self, item: dict[str, Any], where: str) -> list[str]:
         """This call item's sources, none listed before; a source is called once."""
@@ -1066,7 +1193,7 @@ class Ledger:
     def _set_unhashed(self, member: str, value: Any) -> None:
         # The value is in the domain: a write checks its copy, whose keyed and turn members the
         # shapes keep shallow, and the read checks each member before any append.
-        _check_unhashed(member, value, self._kinds, self._questions)
+        _check_unhashed(member, value, self._kinds, self._questions, self._format)
         self._unhashed = {**self._unhashed, member: value}
 
     def prefix_hash(self, n: int) -> str:
@@ -1221,8 +1348,11 @@ def _read(doc: object) -> Record:
         raise _LedgerError("the log has no design item first")
     fmt = member_named(first, "format")
     fmt = None if fmt is MISSING else fmt
-    if type(fmt) is not int or fmt != 1:
-        raise _LedgerError(f"the record's format {described(fmt)} is not one this reader knows, 1")
+    if type(fmt) is not int or fmt not in FORMATS:
+        known = ", ".join(str(f) for f in sorted(FORMATS))
+        raise _LedgerError(
+            f"the record's format {described(fmt)} is not one this reader knows: {known}"
+        )
     others = [k for k in cast("dict[object, Any]", doc) if not _named_one_of(k, _RECORD_MEMBERS)]
     if others:
         view = (

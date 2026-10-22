@@ -195,8 +195,8 @@ class _Walk:
     def unhashed(self, unhashed: dict[str, Any]) -> dict[str, Any]:
         """``unhashed`` with its text digested: exception text, ``unexpected`` whole,
         ``invalid``'s ``repr`` text, the ``reads`` values and an unknown member whole; member
-        names, log-index keys, ``usage``, ``sums``, times, the engine and codec names and an
-        exception's ``type`` are open."""
+        names, log-index keys, ``usage``, ``sums``, ``truncated``, times, the engine and codec
+        names and an exception's ``type`` are open."""
         out: dict[str, Any] = {}
         for member, value in unhashed.items():
             if member in ("turn", "engine", "codec"):
@@ -219,8 +219,9 @@ class _Walk:
         return out
 
     def call(self, entry: dict[str, Any]) -> dict[str, Any]:
-        # ``sums`` passes open: its keys are declared refs, as the record refuses a grounded
-        # one. Once grounded declarations land, a grounded key's candidate needs its digest.
+        # ``sums`` and ``truncated`` pass open: their refs are declared refs, as the record
+        # refuses a grounded one. Once grounded declarations land, a grounded ref's candidate
+        # needs its digest.
         out = dict(entry)
         if "unexpected" in entry:
             out["unexpected"] = self.digest(entry["unexpected"])

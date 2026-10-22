@@ -19,6 +19,7 @@ def test_a_call_result_defaults_every_provenance_member_to_null() -> None:
     assert result.values == {"t:x": 1}
     assert (result.snapshot, result.elicitation, result.prompt) == (None, None, None)
     assert (result.usage, result.attempts) == (None, None)
+    assert result.truncated == ()
 
 
 def test_a_call_result_takes_its_provenance_by_keyword_only() -> None:
@@ -66,5 +67,27 @@ def test_a_source_call_holds_what_the_protocol_names() -> None:
         "refs",
         "questions",
     ]
-    assert [f.name for f in dataclasses.fields(question)] == ["kind", "wording", "labels"]
+    assert [f.name for f in dataclasses.fields(question)] == [
+        "kind",
+        "wording",
+        "labels",
+        "value_type",
+        "is_list",
+        "text",
+        "reference_date",
+    ]
+    # The extraction members are keyword-only.
+    assert [f.name for f in dataclasses.fields(question) if f.kw_only] == [
+        "value_type",
+        "is_list",
+        "text",
+        "reference_date",
+    ]
     assert call.questions["q:x"].labels == ("a", "b")
+    # A probability kind's question leaves the extraction members at their defaults.
+    assert (question.value_type, question.is_list, question.text, question.reference_date) == (
+        None,
+        False,
+        None,
+        None,
+    )

@@ -6,12 +6,14 @@ every slip in ``values`` and every unfilled read before either lint runs a point
 filled from the first of: its grid points, from load's grid and the parameter block through
 ``_leaf_value``; its declared type's values; its list in ``values``. A record's type fill is
 the cross product of its fields' fills, each field filled by the same order under its field
-path. A ``q:`` read's points end with ``Unavailable`` ``refused``.
+path. An extraction read's points cross its value points, from its grid's ``value`` axis or
+its list in ``values``, with its ``p_null`` and ``confidence`` points, then add the two null
+points. A ``q:`` read's points end with ``Unavailable`` ``refused``.
 
 Every point is computed exactly over each boundary's ``Fraction(repr(x))`` and rounded once
-to the nearest ``float``. A point is held in two forms: the
-record form a report shows and the live form a board or binding is given, ``bytes`` as
-``bytes`` and a ``q:`` value as the probabilities a binding returns.
+to the nearest ``float``. A point is held in two forms: the record form a report shows and
+the live form a board or binding is given, ``bytes`` as ``bytes`` and a ``q:`` value as the
+binding's form of its kind, the probabilities or an extraction's five members.
 """
 
 import copy
@@ -22,7 +24,14 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, cast
 
-from jurat._answer import Answer, AnswerKind, answer_document
+from jurat._answer import (
+    Answer,
+    AnswerKind,
+    ExtractionAnswer,
+    answer_document,
+    binding_form,
+    extraction_document,
+)
 from jurat._canonical import encode
 from jurat._design import LoadedDesign, Question
 from jurat._interpret import _marker_document
@@ -39,7 +48,15 @@ from jurat._types import (
     TypeFailure,
     read_type,
 )
-from jurat._values import MAX_INTEGER, described, is_scalar_string, quote, string_data, type_name
+from jurat._values import (
+    MAX_INTEGER,
+    described,
+    domain_error,
+    is_scalar_string,
+    quote,
+    string_data,
+    type_name,
+)
 from jurat.helpers._numbers import exact
 
 _STATE = "t:state"
@@ -196,6 +213,9 @@ class _Filler:
 
     def read(self, read: str) -> list[Point] | None:
         found = read_of(self.loaded, read)
+        if isinstance(found, Question) and found.kind is AnswerKind.extraction:
+            points = self.extraction(read, found)
+            return None if points is None else [*points, _refused(read)]
         if isinstance(found, Question):
             self.typed_paths.add(read)
             return [*self.answers(read, found), _refused(read)]
@@ -309,6 +329,68 @@ class _Filler:
         # Off the grid, or an entry yielding no answer point: each label at 1, in order.
         return [_answer(q, labels, _at(labels, {label: _ONE})) for label in labels]
 
+    def extraction(self, ref: str, q: Question) -> list[Point] | None:
+        """An extraction read's answer points, before its marker: the cross of its value
+        points, its ``p_null`` points and its ``confidence`` points, the last varying fastest,
+        then ``value`` ``None`` with ``p_null`` 1 and with ``p_null`` ``None``; ``guess`` and
+        ``span`` ``None`` in each. ``None`` when nothing fills its value."""
+        entry = cast("Mapping[str, Any] | None", self.loaded._grid.get(ref))
+        if entry is not None and entry["value"]:  # a scalar number question (check 9)
+            self.typed_paths.add(ref)
+            bounds = [self.bound(p) for p in entry["value"]]
+            lo, hi = _end(min(bounds), -1), _end(max(bounds), 1)
+            values: list[object] = [float(x) for x in axis(bounds, lo, hi, integer=False)]
+        elif ref in self.values:
+            values = self.extraction_values(ref, q)
+        else:
+            self.unfilled.append(ref)
+            return None
+        nulls: list[float | None] = [*self.unit_axis(entry, "null", 0.0), None]
+        confidences: list[float | None] = [*self.unit_axis(entry, "confidence", 1.0), None]
+        points = [_extracted(q, v, p, c) for v in values for p in nulls for c in confidences]
+        points += [_extracted(q, None, 1.0, None), _extracted(q, None, None, None)]
+        if entry is not None:
+            self.on_grid.add(ref)
+        return _once(points)
+
+    def unit_axis(self, entry: Mapping[str, Any] | None, role: str, default: float) -> list[float]:
+        """A ``number [0, 1]`` axis's points from a role's leaves, else ``default`` alone."""
+        if entry is None or not entry[role]:
+            return [default]
+        bounds = [self.bound(p) for p in entry[role]]
+        return list(dict.fromkeys(float(x) for x in axis(bounds, _ZERO, _ONE, integer=False)))
+
+    def extraction_values(self, ref: str, q: Question) -> list[object]:
+        """An extraction read's value points from ``values``: each a value of its question's
+        type, list flag and grammar, as a binding returns it, none twice by canonical bytes."""
+        self.consumed.add(ref)
+        out: list[object] = []
+        seen: set[bytes] = set()
+        for value in self.values[ref]:
+            if value is None:  # the null points stand apart; a value point holds a value
+                self.problems.append(f"a value for {quote(ref)} does not conform to its type")
+                continue
+            try:
+                answer = ExtractionAnswer(
+                    cast(Any, q.value_type), q.is_list, value, None, None, None, None
+                )
+            except ValueError:
+                self.problems.append(f"a value for {quote(ref)} does not conform to its type")
+                continue
+            if domain_error(extraction_document(answer)) is not None:
+                self.problems.append(f"a value for {quote(ref)} is outside the value domain")
+                continue
+            held = binding_form(answer)["value"]
+            key = encode(held)
+            if key in seen:
+                self.problems.append(f"values for {quote(ref)} lists one value twice")
+                continue
+            seen.add(key)
+            out.append(held)
+        if not self.values[ref]:
+            self.problems.append(f"values for {quote(ref)} is empty")
+        return out
+
     def distributions(
         self, q: Question, labels: tuple[str, ...], entry: Mapping[str, Any]
     ) -> list[Point]:
@@ -420,6 +502,14 @@ def _once(points: list[Point]) -> list[Point]:
 def _answer(q: Question, labels: tuple[str, ...], d: _Distribution) -> Point:
     answer = Answer(q.kind, labels, d)
     return Point(answer_document(answer), dict(answer.probabilities))
+
+
+def _extracted(q: Question, value: object, p_null: float | None, confidence: float | None) -> Point:
+    """An extraction answer point, ``guess`` and ``span`` ``None``."""
+    answer = ExtractionAnswer(
+        cast(Any, q.value_type), q.is_list, fresh(value), None, p_null, confidence, None
+    )
+    return Point(extraction_document(answer), binding_form(answer))
 
 
 def _refused(ref: str) -> Point:

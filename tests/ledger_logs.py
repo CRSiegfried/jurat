@@ -1,6 +1,6 @@
 """Synthetic record logs for the ledger's tests: a normal turn, a broken entry, a cancelled
-turn and a turn whose codec raised a cancellation, built item by item so a test can take any
-prefix or swap one item."""
+turn, a turn whose codec raised a cancellation and a format-2 extraction turn, built item by
+item so a test can take any prefix or swap one item."""
 
 import copy
 from typing import Any
@@ -127,12 +127,87 @@ CANCELLED: list[dict[str, Any]] = [*NORMAL[:7], CANCEL]
 # A cancellation the codec raised: delivered after the settings item, before any state entry.
 CODEC_CANCELLED: list[dict[str, Any]] = [DESIGN, SETTINGS, CANCEL]
 
+EXTRACTED: dict[str, Any] = {
+    "kind": "extraction",
+    "value_type": "number",
+    "is_list": False,
+    "value": 120,
+    "guess": 120,
+    "p_null": 0.1,
+    "confidence": 0.9,
+    "span": [4, 7],
+}
+EXTRACTION_TREE = {
+    "kind": "open",
+    "value_type": "open",
+    "is_list": "open",
+    "value": "content",
+    "guess": "content",
+    "p_null": "open",
+    "confidence": "open",
+    "span": "content",
+}
+# A format-2 turn asking one extraction question, its call's truncated in UNHASHED. Indices:
+# 0 design, 1 settings, 2 state, 3 call, 4 q:amount, 5 round 1, 6 plan, 7 verdict.
+EXTRACTION: list[dict[str, Any]] = [
+    {**DESIGN, "format": 2, "helpers": 2},
+    {
+        "item": "settings",
+        "settings": SETTINGS["settings"],
+        "providers": {"q:amount": "read"},
+        "classes": {"t:state": {"body": "content"}, "q:amount": EXTRACTION_TREE},
+    },
+    {**STATE, "value": {"body": "Owe 120"}},
+    call(
+        1,
+        "read",
+        questions={
+            "q:amount": {
+                "identity": IDENTITY,
+                "kind": "extraction",
+                "labels": None,
+                "value_type": "number",
+                "is_list": False,
+            }
+        },
+    ),
+    entry("q:amount", 1, 3, EXTRACTED),
+    round_item(1),
+    {**PLAN, "kind": "inform", "steps": [], "reply": "big"},
+    VERDICT,
+]
+
 LOGS = {
     "normal": NORMAL,
     "broken": BROKEN,
     "cancelled": CANCELLED,
     "codec-cancelled": CODEC_CANCELLED,
+    "extraction": EXTRACTION,
 }
+
+# Each log's unhashed members by log-index key, written once the keyed item is in a prefix.
+UNHASHED: dict[str, dict[str, dict[str, Any]]] = {
+    "extraction": {
+        "calls": {
+            "3": {
+                "start": "2026-10-20T00:00:00Z",
+                "latency": 0.25,
+                "usage": None,
+                "attempts": None,
+                "truncated": ["q:amount"],
+            }
+        }
+    }
+}
+
+
+def unhashed_of(name: str, n: int) -> dict[str, Any]:
+    """``name``'s unhashed members keyed by an item of its first ``n``."""
+    members = {
+        member: {k: v for k, v in keyed.items() if int(k) < n}
+        for member, keyed in UNHASHED.get(name, {}).items()
+    }
+    return copy.deepcopy({m: keyed for m, keyed in members.items() if keyed})
 
 
 def fresh(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

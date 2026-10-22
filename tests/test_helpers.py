@@ -87,8 +87,10 @@ def items(r: ReadView) -> list[tuple[str, tuple[object, ...], tuple[object, ...]
 # The helper version and the package's place
 
 
-def test_the_helper_version_is_1() -> None:
-    assert jurat.helpers.HELPERS == 1
+def test_the_helper_version_is_2() -> None:
+    # 2 since the extract helper was added: a record calling it under 1 would replay with
+    # nothing to say why.
+    assert jurat.helpers.HELPERS == 2
     assert type(jurat.helpers.HELPERS) is int
 
 
@@ -99,6 +101,7 @@ def test_helpers_is_not_in_the_engines_api() -> None:
         "pick_with_thresholds",
         "size",
         "mass",
+        "extract",
         "unique",
         "agree",
         "first",

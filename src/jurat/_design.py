@@ -16,7 +16,7 @@ from dataclasses import InitVar, dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal, cast
 
-from jurat._answer import AnswerKind
+from jurat._answer import AnswerKind, ValueType
 from jurat._canonical import decode
 from jurat._types import ListOf, MappingOf, Scalar, Type, b64url_decode, b64url_encode
 from jurat._values import string_data
@@ -113,17 +113,28 @@ class Text:
 class Question:
     """A ``q:`` ref's question: its kind, wording and labels. ``labels``
     is ``None``, a sequence of strings, or a mapping of ``fixed`` and ``candidates`` for a
-    candidate-valued label set."""
+    candidate-valued label set. An extraction question also declares ``value_type``, a
+    ``ValueType`` member or its string, held as the member; ``is_list``, a boolean; ``text``, a
+    board-ref origin ``{"ref": r}`` naming the string its spans index; and ``reference_date``,
+    such an origin or ``None``. A probability kind's question leaves those four at ``None``,
+    ``False``, ``None`` and ``None``."""
 
     kind: AnswerKind | str
     """An ``AnswerKind`` member or its string, held as the member."""
     wording: Text
     labels: Sequence[str] | Mapping[str, Any] | None = None
+    value_type: ValueType | str | None = None
+    is_list: bool = False
+    text: Mapping[str, str] | None = None
+    reference_date: Mapping[str, str] | None = None
 
     def __post_init__(self) -> None:
         kind: object = self.kind
         if isinstance(kind, str) and string_data(kind) in AnswerKind.__members__:  # pyright: ignore[reportUnnecessaryIsInstance]
             kind = AnswerKind(string_data(kind))
+        value_type: object = self.value_type
+        if isinstance(value_type, str) and string_data(value_type) in ValueType.__members__:
+            value_type = ValueType(string_data(value_type))
         labels: object = self.labels
         if isinstance(labels, Mapping):
             snapshot = dict(cast("Mapping[str, Any]", _mapping(labels)))
@@ -134,7 +145,24 @@ class Question:
             labels = MappingProxyType(snapshot)
         else:
             labels = _strings(labels)
-        _set(self, kind=kind, labels=labels)
+        _set(
+            self,
+            kind=kind,
+            labels=labels,
+            value_type=value_type,
+            text=_origin(self.text),
+            reference_date=_origin(self.reference_date),
+        )
+
+
+def _origin(value: object) -> Any:
+    """A board-ref origin as a read-only mapping, each string its string data."""
+    members = _mapping(value)
+    if isinstance(members, MappingProxyType):
+        return MappingProxyType(
+            {k: _string(v) for k, v in cast("Mapping[Any, Any]", members).items()}
+        )
+    return cast(object, members)
 
 
 @dataclass(frozen=True, slots=True)

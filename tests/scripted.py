@@ -25,6 +25,7 @@ from jurat._compile import compile_turn
 from jurat._interpret import interpret
 from jurat._ledger import Ledger, Observer
 from jurat._read_view import Access, UndeclaredRead, _UndeclaredStop
+from jurat._values import FORMAT
 from jurat.helpers import HELPERS
 
 Batch = tuple[SourceCall, ...]
@@ -113,7 +114,9 @@ def open_ledger(
     """A ledger opened as decide opens it: the design and settings items and the state entry.
     ``state`` is in the record's form."""
     ledger = Ledger(observer)
-    ledger.append({"item": "design", "hash": loaded.design_hash, "format": 1, "helpers": HELPERS})
+    ledger.append(
+        {"item": "design", "hash": loaded.design_hash, "format": FORMAT, "helpers": HELPERS}
+    )
     ledger.append(
         {
             "item": "settings",

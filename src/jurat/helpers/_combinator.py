@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from fractions import Fraction
 from typing import cast
 
-from jurat._answer import Answer, answer_document
+from jurat._answer import Answer, ExtractionAnswer, answer_document, extraction_document
 from jurat._canonical import encode
 from jurat._markers import Cause, CauseCode, Unasked, Unavailable, Undetermined, Unsure
 from jurat._read_view import ReadView
@@ -27,8 +27,13 @@ _PRECEDENCE: tuple[type[Undetermined], ...] = (Unavailable, Unsure, Unasked)
 
 
 def _bytes(value: object) -> bytes:
-    """A value's canonical bytes as the record writes it; an answer as its object."""
-    return encode(answer_document(value) if type(value) is Answer else value)
+    """A value's canonical bytes as the record writes it; an answer, of either kind, as its
+    object."""
+    if type(value) is Answer:
+        return encode(answer_document(value))
+    if type(value) is ExtractionAnswer:
+        return encode(extraction_document(value))
+    return encode(value)
 
 
 def _refs(combinator: str, refs: Sequence[str]) -> tuple[str, ...]:

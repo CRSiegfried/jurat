@@ -24,7 +24,7 @@ def test_answer_is_public() -> None:
 
 def test_the_answer_kinds_are_a_strenum() -> None:
     assert issubclass(AnswerKind, enum.StrEnum)
-    assert {k.value for k in AnswerKind} == {"noul", "choice", "score"}
+    assert {k.value for k in AnswerKind} == {"noul", "choice", "score", "extraction"}
     assert encode(AnswerKind.noul) == b'"noul"'
 
 

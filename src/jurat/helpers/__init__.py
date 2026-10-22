@@ -12,7 +12,7 @@ each of them is built on in ``_call``. The lints are in ``_dead`` and ``_unsure`
 points both share in ``_points``.
 """
 
-from jurat.helpers._choice import mass, pick_with_margin, pick_with_thresholds, size
+from jurat.helpers._choice import extract, mass, pick_with_margin, pick_with_thresholds, size
 from jurat.helpers._combinator import agree, collect, first, priority, unique
 from jurat.helpers._dead import dead_questions
 from jurat.helpers._runner import BindingNotFound, RunRefusal, run_plan
@@ -24,6 +24,7 @@ __all__ = [
     "agree",
     "collect",
     "dead_questions",
+    "extract",
     "first",
     "mass",
     "pick_with_margin",
@@ -35,4 +36,4 @@ __all__ = [
     "unsure_to_execute",
 ]
 
-HELPERS = 1
+HELPERS = 2

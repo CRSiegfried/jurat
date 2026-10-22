@@ -23,7 +23,7 @@ from graphlib import CycleError, TopologicalSorter
 from types import MappingProxyType
 from typing import Any, cast
 
-from jurat._answer import AnswerKind
+from jurat._answer import AnswerKind, ValueType
 from jurat._canonical import _DecodeError, _DuplicateKey, decode, document_depth, encode, sha256_ref
 from jurat._design import (
     _BUILT_BY_LOAD,
@@ -48,7 +48,7 @@ from jurat._design import (
     live_value,
     new_failure,
 )
-from jurat._form import check_form
+from jurat._form import X_ROLES, check_form
 from jurat._refs import (
     _ParsedRef,
     code_point_sorted,
@@ -81,6 +81,9 @@ from jurat._types import (
     value_conforms,
 )
 from jurat._values import (
+    EXTRACTION_FORMAT,
+    FORMAT,
+    FORMATS,
     MAX_DOCUMENT_DEPTH,
     MISSING,
     domain_error,
@@ -116,6 +119,20 @@ _GATING = frozenset({1, 2, 3, 4, 10, 12})
 _NUMBER = Scalar("number")
 _NUMBERS = MappingOf(_NUMBER)
 _UNIT = Interval("number", 0, 1)
+_STRING = Scalar("string")
+_EXTRACTION_TREE = {
+    "kind": "open",
+    "value_type": "open",
+    "is_list": "open",
+    "value": "content",
+    "guess": "content",
+    "p_null": "open",
+    "confidence": "open",
+    "span": "content",
+}
+"""An extraction answer's default class tree, which is also its full tree."""
+_EXTRACTION_SET = ("value", "guess", "span")
+"""The members a class name declared at an extraction ``q:`` ref sets."""
 _UNITS = MappingOf(_UNIT)
 _TYPE_SIZE = 2**20
 """The most code points a type spells with its definitions resolved, and the types of the
@@ -154,6 +171,7 @@ def _load_document(given: bytes | Mapping[str, Any], functions: Mapping[str, Any
         check_form(_build(parsed, resolved), unresolved),
         parsed=parsed,
         given=given if isinstance(given, bytes) else None,
+        fmt=cast(int, parsed["format"]),
     )
     loader.failures += failures
     return loader.run()
@@ -168,7 +186,7 @@ class _Use:
 
     owner: str  # the declared name, or "policy" for the policy and "" for the plan
     where: str
-    role: str  # need, slot, read, policy, requirement, source-requirement, group
+    role: str  # need, slot, text, read, policy, requirement, source-requirement, group
     ref: str
     parsed: _ParsedRef
 
@@ -179,11 +197,18 @@ class _Use:
 
 class _Loader:
     def __init__(
-        self, checked: Any, *, parsed: dict[str, Any] | None = None, given: bytes | None = None
+        self,
+        checked: Any,
+        *,
+        parsed: dict[str, Any] | None = None,
+        given: bytes | None = None,
+        fmt: int = FORMAT,
     ) -> None:
         # From a document: the parsed document and, given as bytes, the bytes.
         self.parsed = parsed
         self.given = given
+        # The format the document is written under: a document's own, read under its rules.
+        self.format = fmt
         self.d: Design = checked.design
         self.failures: list[DesignFailure] = list(checked.failures)
         # What a member check 10's form test refused still provides or declares.
@@ -356,6 +381,10 @@ class _Loader:
                 elif tag == "candidate":
                     self.candidates.append((sid, f"{where}'s question {_q(ref)}", value))
                     self.use(sid, f"{where}'s question {_q(ref)}", "candidate", value)
+            for ref, question in _questions(source):
+                for member, origin in _extraction_origins(question):
+                    shown = f"{where}'s question {_q(ref)}'s {member}"
+                    self.use(sid, shown, "text", origin["ref"])
         for rid, rule in self.rules():
             for ref in rule.reads:
                 self.use(rid, f"rule {_q(rid)}", "read", ref)
@@ -433,16 +462,28 @@ class _Loader:
             counts = Counter(refs)
             for ref in code_point_sorted({r for r, n in counts.items() if n > 1}):
                 self.fail(3, (gname, ref), f"group {_q(gname)} names {_q(ref)} more than once")
+        form_refused = {ref for ref, _ in self.form_providers}  # check 10 has failed them
         for key, parsed in self.class_keys:
             where = f"the classes block's key {_q(key)}"
             if parsed.candidate is not None:
                 self.fail(3, (key,), f"{where} has a grounded bracket")
             elif parsed.fields:
                 self.fail(3, (key,), f"{where} has a field path")
-            elif parsed.level == "q":
-                self.fail(3, (key,), f"{where} is not t:state, a source's t: ref or a d: ref")
             elif key not in self.providers:
                 self.fail(3, (key,), f"{where} has no provider")
+            elif parsed.level == "q" and key not in form_refused and not self.extraction_ref(key):
+                self.fail(
+                    3,
+                    (key,),
+                    f"{where} is not t:state, a source's t: ref, a d: ref or an extraction q: ref",
+                )
+
+    def extraction_ref(self, ref: str) -> bool:
+        """Whether a ``q:`` ref's provider declares it an extraction question."""
+        provider = self.providers.get(ref, [None])[0]
+        source = self.d.sources.get(provider) if provider is not None else None
+        provided = None if source is None else source.provides.get(ref)
+        return isinstance(provided, Question) and provided.kind is AnswerKind.extraction
 
     def check_4(self) -> None:
         for sid, source in self.sources():
@@ -475,6 +516,7 @@ class _Loader:
                 )
         allowed = {
             "slot": ("d", "t"),
+            "text": ("d", "t"),
             "policy": ("d", "t"),
             "requirement": ("d",),
             "source-requirement": ("d",),
@@ -537,6 +579,10 @@ class _Loader:
         for owner, key, where, entry in self.boundary_entries():
             if isinstance(entry, list):
                 self.repeats(owner, where, "leaf paths", cast("list[str]", entry), refs=False)
+                continue
+            if "null" in entry:
+                for role in X_ROLES:
+                    self.repeats(owner, where, role, entry[role], refs=False)
                 continue
             for role in ("bar", "thresholds", "margin"):
                 self.repeats(owner, where, role, entry[role], refs=False)
@@ -866,9 +912,15 @@ class _Loader:
             if u.role == "boundary":
                 continue  # a key's read is typed as its component's read (check 9)
             t = self.read_type(u)
+            names = (u.owner, u.ref) if u.owner else (u.ref,)
             if isinstance(t, TypeFailure):
-                names = (u.owner, u.ref) if u.owner else (u.ref,)
                 self.fail(9, names, f"{u.where} reads {_q(u.ref)}: {t.message}")
+            elif u.role == "text" and resolve(t, self.defs) != _STRING:
+                self.fail(
+                    9,
+                    names,
+                    f"{u.where} names {_q(u.ref)}, whose type is not exactly string, not nullable",
+                )
         # Every requirement on the plan can hold. A step's requirements are
         # in plan declarations, which check 12 refuses, so this engine applies the clause to
         # none of them; nor the clause on a declaration's binding paths.
@@ -928,6 +980,22 @@ class _Loader:
                     self.bound(owner, where, path, self.leaf_types[path], _NUMBER, "number")
                 continue
             question = self.question(f"q:{parsed.name}")
+            extraction = question.kind is AnswerKind.extraction
+            if extraction != ("null" in entry):
+                wanted = (
+                    "null, confidence and value"
+                    if extraction
+                    else ("bar, thresholds, margin and mass")
+                )
+                self.fail(
+                    9,
+                    names,
+                    f"{where}: {_q(key)} is a {question.kind} read, whose roles are {wanted}",
+                )
+                continue
+            if extraction:
+                self.extraction_bounds(owner, key, where, entry, question)
+                continue
             labels = ("no", "yes") if question.kind is AnswerKind.noul else question.labels
             assert isinstance(labels, tuple)
             for role in ("bar", "margin"):
@@ -958,6 +1026,25 @@ class _Loader:
                         f"{where}: its mass names {_q(label)}, which is not a label of {_q(key)}",
                     )
 
+    def extraction_bounds(
+        self, owner: str, key: str, where: str, entry: Mapping[str, Any], question: Question
+    ) -> None:
+        """An extraction read's roles: ``null`` and ``confidence`` leaves of ``number [0, 1]``,
+        ``value`` leaves of ``number``, only over a scalar ``number`` question."""
+        for role in ("null", "confidence"):
+            for path in self.typed(entry[role]):
+                self.bound(owner, where, path, self.leaf_types[path], _UNIT, "number [0, 1]")
+        if entry["value"] and (question.value_type is not ValueType.number or question.is_list):
+            self.fail(
+                9,
+                (owner, key),
+                f"{where}: its value role names leaves, but {_q(key)} is not a scalar number "
+                "question",
+            )
+            return
+        for path in self.typed(entry["value"]):
+            self.bound(owner, where, path, self.leaf_types[path], _NUMBER, "number")
+
     def typed(self, paths: Sequence[str]) -> list[str]:
         """The leaf paths check 8 let through, each with its type."""
         return [p for p in paths if p not in self.refused_leaves and p in self.leaf_types]
@@ -978,9 +1065,13 @@ class _Loader:
         """Check 10's test of each declared class tree against its ref's type, run once checks
         1 to 4, 10 and 12 pass."""
         for key, _ in self.class_keys:  # a key check 7 refused is left out
-            t = self.state_type if key == _STATE else self.types[key]
-            assert t is not None
-            for message in _conformance(self.d.classes[key], t, self.defs, ""):
+            if key.startswith("q:"):
+                messages = _extraction_conformance(self.d.classes[key])
+            else:
+                t = self.state_type if key == _STATE else self.types[key]
+                assert t is not None
+                messages = _conformance(self.d.classes[key], t, self.defs, "")
+            for message in messages:
                 self.fail(10, (key,), f"the class tree of {_q(key)} {message}")
 
     def read_type(self, u: _Use) -> Type | TypeFailure:
@@ -1027,7 +1118,7 @@ class _Loader:
     def needs(self) -> dict[str, frozenset[str]]:
         out: dict[str, set[str]] = {sid: set(s.needs) for sid, s in self.sources()}
         for u in self.uses:
-            if u.role == "slot":
+            if u.role in ("slot", "text"):
                 out[u.owner].add(u.ref)
         return {sid: frozenset(refs) for sid, refs in out.items()}
 
@@ -1035,7 +1126,9 @@ class _Loader:
         providers = self.provider_map()
         preds: dict[str, set[str]] = {n: set() for n in (*self.d.sources, *self.d.rules)}
         for u in self.uses:
-            if u.role in ("need", "slot", "read", "source-requirement") and u.base != _STATE:
+            if u.role in ("need", "slot", "text", "read", "source-requirement") and (
+                u.base != _STATE
+            ):
                 preds[u.owner].add(providers[u.base])
         graph = {n: frozenset(preds[n]) for n in code_point_sorted(preds)}
         # Every predecessor is a key, or graphlib would add it as a root.
@@ -1072,7 +1165,7 @@ class _Loader:
                 value = leaf.value
             parameters[path] = {"type": leaf.type, "value": value}
         return {
-            "format": 1,
+            "format": self.format,
             "name": d.name,
             "state": d.state,
             "sources": {sid: _source(s) for sid, s in d.sources.items()},
@@ -1163,7 +1256,11 @@ class _Loader:
         typed = {_STATE: self.state_type, **self.types}
         resolutions: dict[str, Type] = {}
         for ref in (_STATE, *providers):
-            classes[ref] = _tree(typed[ref], self.defs, self.d.classes.get(ref))
+            declared = self.d.classes.get(ref)
+            if ref.startswith("q:") and self.extraction_ref(ref):
+                classes[ref] = _extraction_tree(declared)
+            else:
+                classes[ref] = _tree(typed[ref], self.defs, declared)
         callables: dict[str, Callable[..., Any]] = {
             rid: rule.function for rid, rule in self.rules()
         }
@@ -1272,6 +1369,9 @@ def _boundaries(boundaries: Mapping[str, Any] | None) -> dict[str, Any] | None:
             out[key] = _unordered(cast("list[str]", entry))
             continue
         roles = cast("dict[str, Any]", entry)
+        if "null" in roles:  # an extraction read's roles
+            out[key] = {role: _unordered(roles[role]) for role in X_ROLES}
+            continue
         mass = [
             {"labels": _unordered(m["labels"]), "bounds": _unordered(m["bounds"])}
             for m in cast("list[dict[str, list[str]]]", roles["mass"])
@@ -1290,6 +1390,8 @@ def _entry_paths(entry: Any) -> list[str]:
     if isinstance(entry, list):
         return cast("list[str]", entry)
     roles = cast("dict[str, Any]", entry)
+    if "null" in roles:
+        return [*roles["null"], *roles["confidence"], *roles["value"]]
     paths = [*roles["bar"], *roles["thresholds"], *roles["margin"]]
     for m in cast("list[dict[str, list[str]]]", roles["mass"]):
         paths += m["bounds"]
@@ -1317,6 +1419,11 @@ def _grid(document: Mapping[str, Any]) -> Mapping[str, Any]:
                 into.update((_held(p), p) for p in cast("list[str]", entry))
                 continue
             roles = cast("dict[str, Any]", entry)
+            if "null" in roles:  # an extraction read's; check 9 gave every component one form
+                into_roles = entries.setdefault(key, {role: {} for role in X_ROLES})
+                for role in X_ROLES:
+                    into_roles[role].update((_held(p), p) for p in roles[role])
+                continue
             acc = entries.setdefault(key, {"bar": {}, "thresholds": {}, "margin": {}, "mass": {}})
             for role in ("bar", "thresholds", "margin"):
                 acc[role].update((_held(p), p) for p in roles[role])
@@ -1330,6 +1437,10 @@ def _grid(document: Mapping[str, Any]) -> Mapping[str, Any]:
         if not key.startswith("q:"):
             if acc:
                 grid[key] = _ascending(acc)
+            continue
+        if "null" in acc:
+            if any(acc[role] for role in X_ROLES):
+                grid[key] = MappingProxyType({role: _ascending(acc[role]) for role in X_ROLES})
             continue
         if not any(acc[role] for role in ("bar", "thresholds", "margin")) and not any(
             bounds for _, bounds in acc["mass"].values()
@@ -1384,6 +1495,14 @@ def _source(source: Source) -> dict[str, Any]:
                 "wording": _text(provided.wording),
                 "labels": None if labels is None else list(cast("tuple[str, ...]", labels)),
             }
+            if provided.kind is AnswerKind.extraction:
+                date = provided.reference_date
+                provides[ref].update(
+                    value_type=str(provided.value_type),
+                    is_list=provided.is_list,
+                    text=dict(cast("Mapping[str, str]", provided.text)),
+                    reference_date=None if date is None else dict(date),
+                )
         else:
             provides[ref] = dict(cast("Mapping[str, Any]", provided))
     w, r = source.when, source.requirement
@@ -1487,6 +1606,44 @@ def _type_size(text: str, t: Type, sizes: Mapping[str, int]) -> int:
         elif isinstance(node, Nullable):
             stack.append(node.inner)
     return min(size, _TYPE_SIZE + 1)
+
+
+def _extraction_origins(question: Question) -> Iterator[tuple[str, Mapping[str, str]]]:
+    """An extraction question's ``text`` and ``reference_date`` origins, each declared;
+    check 10's form test has passed them."""
+    if question.kind is not AnswerKind.extraction:
+        return
+    for member, origin in (("text", question.text), ("reference_date", question.reference_date)):
+        if origin is not None:
+            yield member, origin
+
+
+def _extraction_tree(declared: Any) -> dict[str, Any]:
+    """An extraction answer's class tree in full: a declared class name sets ``value``,
+    ``guess`` and ``span``, a declared object the members it names; the rest keep the
+    default."""
+    tree = dict(_EXTRACTION_TREE)
+    if isinstance(declared, str):
+        tree.update(dict.fromkeys(_EXTRACTION_SET, declared))
+    elif isinstance(declared, dict):
+        tree.update(cast("dict[str, Any]", declared))
+    return tree
+
+
+def _extraction_conformance(tree: Any) -> list[str]:
+    """Why a class tree does not conform to an extraction answer, a record of its eight
+    members, each a scalar or a list of scalars, so each takes a class name."""
+    if isinstance(tree, str):
+        return []
+    out: list[str] = []
+    for key, member in cast("dict[str, Any]", tree).items():
+        if key not in _EXTRACTION_TREE:
+            out.append(
+                f"names {_q(key)} at its root, which is not a member of an extraction answer"
+            )
+        elif not isinstance(member, str):
+            out.append(f"holds an object at {_q(key)}, where its type is not a record")
+    return out
 
 
 def _scalar(t: Type) -> bool:
@@ -1652,15 +1809,16 @@ def _gate(given: bytes | Mapping[str, Any]) -> tuple[dict[str, Any] | None, Any]
     found = member_named(members, "format")  # no code of a caller's key runs
     if found is MISSING:
         return None, ((), "the document has no format")
-    if type(found) is not int or found != 1:
-        return None, ((), "the document's format is not 1, the one format this engine reads")
+    if type(found) is not int or found not in FORMATS:
+        known = ", ".join(str(f) for f in sorted(FORMATS))
+        return None, ((), f"the document's format is not one this engine reads: {known}")
     # The document as a holder, then each value it holds to the size bounds too; it shares
     # no container, so the holder's walk is linear in it.
     if domain_error(members, MAX_DOCUMENT_DEPTH) is not None or any(
         domain_error(value) is not None for value in _value_places(members)
     ):
         return None, ((), "the document holds a value outside the value domain")
-    return members, next(_member_failures(members), None)
+    return members, next(_member_failures(members, found), None)
 
 
 def _value_places(doc: dict[str, Any]) -> Iterator[object]:
@@ -1714,7 +1872,7 @@ def _items(value: object) -> list[dict[str, Any]]:
     return [m for m in cast("list[Any]", value) if isinstance(m, dict)]
 
 
-def _member_failures(doc: dict[str, Any]) -> Iterator[tuple[tuple[str, ...], str]]:
+def _member_failures(doc: dict[str, Any], fmt: int) -> Iterator[tuple[tuple[str, ...], str]]:
     """Every object's missing or extra member, in one traversal order: the document's members,
     then each block's in code-point order of its name, each declaration's in code-point order
     of its own. A step is the ``plan`` item's, each
@@ -1739,13 +1897,15 @@ def _member_failures(doc: dict[str, Any]) -> Iterator[tuple[tuple[str, ...], str
             for r in _items(step.get("requirements")):
                 required = frozenset({"ref", "value"})
                 yield from _missing_or_extra(r, required, f"{where}'s step requirement", (name,))
-    yield from _function_failures(doc["policy"], "the policy", ("policy",), _POLICY, _POLICY_TABLE)
+    yield from _function_failures(
+        doc["policy"], "the policy", ("policy",), _POLICY, _POLICY_TABLE, fmt
+    )
     for r in _items(doc["requirements"]):
         yield from _missing_or_extra(r, frozenset({"ref", "value"}), "a plan-level requirement", ())
     for rid, rule in _objects(doc["rules"]):
-        yield from _function_failures(rule, f"rule {_q(rid)}", (rid,), _RULE, _TABLE)
+        yield from _function_failures(rule, f"rule {_q(rid)}", (rid,), _RULE, _TABLE, fmt)
     for sid, source in _objects(doc["sources"]):
-        yield from _source_failures(sid, source)
+        yield from _source_failures(sid, source, fmt)
     for name, tool in _objects(doc["tools"]):
         yield from _missing_or_extra(tool, frozenset(), f"tool {_q(name)}", (name,))
 
@@ -1756,8 +1916,10 @@ def _function_failures(
     names: tuple[str, ...],
     function: frozenset[str],
     table: frozenset[str],
+    fmt: int,
 ) -> Iterator[tuple[tuple[str, ...], str]]:
-    """A rule's or the policy's members by its ``form``, and a function's boundaries."""
+    """A rule's or the policy's members by its ``form``, and a function's boundaries; the
+    extraction roles are a form from format ``EXTRACTION_FORMAT`` on."""
     if not isinstance(obj, dict):
         return
     members = cast("dict[str, Any]", obj)
@@ -1776,6 +1938,9 @@ def _function_failures(
             if parsed is None or parsed.level != "q":
                 continue
             shown = f"{where}'s boundaries for {_q(key)}"
+            if fmt >= EXTRACTION_FORMAT and "null" in entry:  # an extraction read's roles
+                yield from _missing_or_extra(entry, frozenset(X_ROLES), shown, (*names, key))
+                continue
             roles = frozenset({"bar", "thresholds", "margin", "mass"})
             yield from _missing_or_extra(entry, roles, shown, (*names, key))
             for m in _items(entry.get("mass")):
@@ -1783,7 +1948,13 @@ def _function_failures(
                 yield from _missing_or_extra(m, bounds, f"{shown}'s mass member", (*names, key))
 
 
-def _source_failures(sid: str, source: dict[str, Any]) -> Iterator[tuple[tuple[str, ...], str]]:
+_QUESTION = frozenset({"kind", "wording", "labels"})
+_EXTRACTION = _QUESTION | {"value_type", "is_list", "text", "reference_date"}
+
+
+def _source_failures(
+    sid: str, source: dict[str, Any], fmt: int
+) -> Iterator[tuple[tuple[str, ...], str]]:
     where, names = f"source {_q(sid)}", (sid,)
     yield from _missing_or_extra(source, _SOURCE, where, names)
     for ref, provided in _objects(source.get("provides")):
@@ -1791,7 +1962,12 @@ def _source_failures(sid: str, source: dict[str, Any]) -> Iterator[tuple[tuple[s
         if not ref.startswith("q:"):
             yield from _missing_or_extra(provided, frozenset({"type", "candidates"}), shown, at)
             continue
-        yield from _missing_or_extra(provided, frozenset({"kind", "wording", "labels"}), shown, at)
+        extraction = provided.get("kind") == AnswerKind.extraction
+        if extraction and fmt < EXTRACTION_FORMAT:
+            yield at, f"{shown} is an extraction question, which format {fmt} does not have"
+        else:
+            members = _EXTRACTION if extraction else _QUESTION
+            yield from _missing_or_extra(provided, members, shown, at)
         if isinstance(provided.get("wording"), dict):
             yield from _text_failures(provided["wording"], f"{shown}'s wording", at)
         if isinstance(provided.get("labels"), dict):
@@ -1945,7 +2121,15 @@ def _build(doc: dict[str, Any], resolved: Mapping[str, Any]) -> Design:
     def provided(ref: str, value: dict[str, Any]) -> Any:
         if not ref.startswith("q:"):
             return value
-        return Question(value["kind"], _text_of(value["wording"]), value["labels"])
+        return Question(
+            value["kind"],
+            _text_of(value["wording"]),
+            value["labels"],
+            value_type=value.get("value_type"),
+            is_list=value.get("is_list", False),
+            text=value.get("text"),
+            reference_date=value.get("reference_date"),
+        )
 
     def source(sid: str, s: dict[str, Any]) -> Source:
         w, r = _object(s["when"]), _object(s["requirement"])

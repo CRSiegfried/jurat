@@ -16,7 +16,7 @@ from fractions import Fraction
 from types import MappingProxyType
 from typing import Any, NamedTuple, cast
 
-from jurat._answer import AnswerKind
+from jurat._answer import AnswerKind, ValueType
 from jurat._canonical import decode, encode
 from jurat._design import (
     Design,
@@ -56,6 +56,9 @@ MAX_LABELS = 2**18
 MAX_LABEL_CODE_POINTS = 2**24
 """The most code points a question's labels hold in all."""
 _Q_ROLES = frozenset({"bar", "thresholds", "margin", "mass"})
+_X_ROLES = frozenset({"null", "confidence", "value"})
+X_ROLES = ("null", "confidence", "value")
+"""An extraction read's ``boundaries`` roles."""
 _HITS = frozenset({"U", "A", "P", "F", "C+", "C<", "C>", "C#"})
 
 
@@ -319,15 +322,28 @@ class _Form:
     def question(self, q: Question, where: str, names: tuple[str, ...]) -> Question | None:
         ok = True
         if not isinstance(q.kind, AnswerKind):
-            self.fail(names, f"{where}'s kind is not noul, choice or score")
+            self.fail(names, f"{where}'s kind is not noul, choice, score or extraction")
             ok = False
         wording = self.text(q.wording, f"{where}'s wording", names)
         if wording is None:
             ok = False
         labels: object = q.labels
+        if q.kind is AnswerKind.extraction:
+            ok = self.extraction(q, where, names) and ok
+        elif isinstance(q.kind, AnswerKind) and not _probability_members_unset(q):
+            self.fail(
+                names,
+                f"{where} is a {q.kind.value} question and declares value_type, is_list, text "
+                "or reference_date, which only an extraction question declares",
+            )
+            ok = False
         if q.kind is AnswerKind.noul:
             if labels is not None:
                 self.fail(names, f"{where} is a noul question and declares labels")
+                ok = False
+        elif q.kind is AnswerKind.extraction:
+            if labels is not None:
+                self.fail(names, f"{where} is an extraction question and declares labels")
                 ok = False
         elif isinstance(labels, Mapping) and q.kind is AnswerKind.choice:
             members = cast("Mapping[object, Any]", labels)
@@ -345,7 +361,39 @@ class _Form:
         if not ok:
             return None
         assert wording is not None
-        return Question(q.kind, wording, q.labels)
+        return Question(
+            q.kind,
+            wording,
+            q.labels,
+            value_type=q.value_type,
+            is_list=q.is_list,
+            text=q.text,
+            reference_date=q.reference_date,
+        )
+
+    def extraction(self, q: Question, where: str, names: tuple[str, ...]) -> bool:
+        """An extraction question's members of their form: a value type, a boolean list flag,
+        a board-ref origin for ``text`` and one or ``None`` for ``reference_date``."""
+        ok = True
+        if not isinstance(q.value_type, ValueType):
+            self.fail(
+                names,
+                f"{where}'s value_type is not text, number, date, time, datetime or duration",
+            )
+            ok = False
+        if type(q.is_list) is not bool:
+            self.fail(names, f"{where}'s is_list is not a boolean")
+            ok = False
+        if not _ref_origin(q.text):
+            self.fail(names, f"{where}'s text is not a board-ref origin, an object of one ref")
+            ok = False
+        if q.reference_date is not None and not _ref_origin(q.reference_date):
+            self.fail(
+                names,
+                f"{where}'s reference_date is not null or a board-ref origin, an object of one ref",
+            )
+            ok = False
+        return ok
 
     def labels(
         self, value: object, where: str, names: tuple[str, ...], least: int
@@ -509,12 +557,22 @@ class _Form:
         return [string_data(cast(str, m)) for m in members]
 
     def roles(self, value: object, where: str, names: tuple[str, ...]) -> dict[str, Any] | None:
-        """A ``q:`` read's entry: ``bar``, ``thresholds``, ``margin`` and ``mass``, all four."""
-        if (
-            not isinstance(value, Mapping)
-            or frozenset(cast("Mapping[str, Any]", value)) != _Q_ROLES
-        ):
-            self.fail(names, f"{where} is not a mapping of bar, thresholds, margin and mass")
+        """A ``q:`` read's entry: ``bar``, ``thresholds``, ``margin`` and ``mass``, all four; or
+        an extraction read's ``null``, ``confidence`` and ``value``, all three. Which form its
+        read's kind takes is check 9's."""
+        keys = frozenset(cast("Mapping[str, Any]", value)) if isinstance(value, Mapping) else None
+        if keys == _X_ROLES:
+            entry = cast("Mapping[str, Any]", value)
+            paths = {role: self.paths(entry[role], f"{where}'s {role}", names) for role in X_ROLES}
+            if any(p is None for p in paths.values()):
+                return None
+            return paths
+        if keys != _Q_ROLES:
+            self.fail(
+                names,
+                f"{where} is not a mapping of bar, thresholds, margin and mass, nor of null, "
+                "confidence and value",
+            )
             return None
         entry = cast("Mapping[str, Any]", value)
         out: dict[str, Any] = {}
@@ -542,6 +600,25 @@ class _Form:
             return None
         out["mass"] = sets
         return out
+
+
+def _probability_members_unset(q: Question) -> bool:
+    """A probability kind's question leaves every extraction member at its default."""
+    return (
+        q.value_type is None
+        and type(q.is_list) is bool
+        and q.is_list is False
+        and q.text is None
+        and q.reference_date is None
+    )
+
+
+def _ref_origin(value: object) -> bool:
+    """A board-ref origin: a mapping of the one tag ``ref`` to a string."""
+    if not isinstance(value, Mapping) or len(cast("Mapping[object, Any]", value)) != 1:
+        return False
+    ((tag, ref),) = cast("Mapping[object, Any]", value).items()
+    return tag == "ref" and isinstance(ref, str) and is_scalar_string(ref)
 
 
 def _slot_form(slot: object) -> bool:

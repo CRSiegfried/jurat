@@ -29,6 +29,16 @@ deepest member."""
 MAX_DOCUMENT_DEPTH = 128
 """The deepest a document the encoder writes or a reader parses nests."""
 
+FORMAT = 2
+"""The format number this engine writes into a record and a design document. It reads every
+format from 1 up to it, each under that format's rules."""
+
+FORMATS = frozenset(range(1, FORMAT + 1))
+"""The formats this engine reads."""
+
+EXTRACTION_FORMAT = 2
+"""The first format with the extraction answer kind and a call's ``truncated``."""
+
 
 def string_data(value: str) -> str:
     """The exact ``str`` holding a string's data, whatever its class overrides."""

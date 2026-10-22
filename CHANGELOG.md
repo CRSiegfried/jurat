@@ -4,6 +4,21 @@ All notable changes to jurat are recorded here. The format follows [Keep a Chang
 
 ## [Unreleased]
 
+### Added
+
+- The `extraction` answer kind: a question that asks for a typed value read from a text. `Question` takes `value_type`, `is_list`, `text` and `reference_date`; `ValueType` names the six value types; `ExtractionAnswer` holds the answer's `value`, `guess`, `p_null`, `confidence` and `span`, and checks each when built. Dates, times, datetimes and durations are checked by jurat's own grammar, alike on every Python.
+- `RenderedQuestion` gives an extraction question's `value_type`, `is_list`, `text` and `reference_date`, keyword-only; a question of another kind leaves them at `None`, `False`, `None` and `None`.
+- `CallResult.truncated`: the `q:` refs whose answer came from a response the provider cut short, recorded under the call in `unhashed` and outside every hash.
+- `jurat.helpers.extract`: an extraction answer's value, or `Unsure` with `abstained` when the value is null or `p_null` is at or above the bar.
+- The extraction roles of a `boundaries` entry, `null`, `confidence` and `value`, and the dead-question lint's points over an extraction read; an extraction read with no `value` role takes its values from the lint's `values` argument.
+
+### Changed
+
+- Records and design documents are format 2, and the helper version is 2. Every design hash and record hash changes, so golden hashes must be updated.
+- `AnswerKind` has a fourth member, `extraction`; code that matches on every kind must handle it.
+- The ledger refuses a `q:` answer whose kind is not its call item's question's.
+- 0.2.0 reads format-1 records and loads format-1 design documents to their own hash, each under format 1's rules, so a record written under 0.1.0 replays under its stored design with `helpers-mismatch` as its only finding.
+
 ## [0.1.0] - 2026-10-21
 
 ### Changed

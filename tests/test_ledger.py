@@ -309,6 +309,12 @@ MARKER = {"kind": "Unavailable", "cause": {"code": "timed-out", "refs": ["q:spam
 R2 = [*R1_DONE, call(2, "ask_spam", questions=QUESTIONS)]  # round 2's call is item 7
 
 
+def asked(kind: str, labels: list[str]) -> list[dict[str, Any]]:
+    """``R2`` with its call item asking ``q:spam`` as a question of ``kind``."""
+    question = {**QUESTIONS["q:spam"], "kind": kind, "labels": labels}
+    return [*R1_DONE, call(2, "ask_spam", questions={"q:spam": question})]
+
+
 @pytest.mark.parametrize(
     ("prefix", "item", "match"),
     cast(
@@ -393,10 +399,13 @@ def test_what_no_turn_writes_is_refused(
             (R2, entry("q:spam", 2, 7, {**ANSWER, "probabilities": {}})),
             (R2, entry("q:spam", 2, 7, {**ANSWER, "probabilities": {"x": "high"}})),
             (
-                R2,
+                asked("score", []),
                 entry("q:spam", 2, 7, {"kind": "score", "labels": [], "probabilities": {}}),
             ),
-            (R2, entry("q:spam", 2, 7, {**ANSWER, "kind": "choice", "labels": ["a"]})),
+            (
+                asked("choice", ["a"]),
+                entry("q:spam", 2, 7, {**ANSWER, "kind": "choice", "labels": ["a"]}),
+            ),
             (R1_ENTRY, entry("t:mail/subject", 1, 3, "not an answer")),
         ],
     ),
@@ -612,7 +621,11 @@ def question(**members: Any) -> dict[str, Any]:
             (R1_DONE, call(2, "s", questions=[]), "'questions' is not an object"),
             (R1_DONE, call(2, "s", questions={"t:x": {}}), "key 't:x', which is not a q: ref"),
             (R1_DONE, call(2, "s", questions={"spam": {}}), "key 'spam', which is not a q: ref"),
-            (R1_DONE, call(2, "s", questions=question(kind="yesno")), "not noul, choice or score"),
+            (
+                R1_DONE,
+                call(2, "s", questions=question(kind="yesno")),
+                "not noul, choice, score or extraction",
+            ),
             (R1_DONE, call(2, "s", questions=question(identity=1)), "'identity' is not a string"),
             (R1_DONE, call(2, "s", questions=question(labels=["yes"])), "not null, as noul's"),
             (

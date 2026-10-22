@@ -13,6 +13,7 @@ provenance. It logs the refs each source was asked, which replay reads for
 from collections.abc import Mapping
 from typing import Any, cast
 
+from jurat._answer import AnswerKind, ValueType
 from jurat._binding import CallResult, SourceCall
 from jurat._design import LoadedDesign
 from jurat._markers import Cause, CauseCode, Failed, Unavailable
@@ -77,20 +78,53 @@ class FixtureBinding:
         return CallResult(values)
 
     def _answer(self, ref: str, entry: Mapping[str, Any]) -> object:
-        """The recorded entry's value, typed, a ``q:`` value as its probabilities, or one of
-        the three markers a binding may return; ``_NO_KEY`` for any other marker."""
+        """The recorded entry's value, typed, a ``q:`` value in the binding's form of its
+        recorded kind, or one of the three markers a binding may return; ``_NO_KEY`` for any
+        other marker."""
         if "value" in entry:
             value = entry["value"]
             if ref.startswith("q:"):
-                # The ledger refuses a q: value that is not an answer's object, live and read
-                # back, so each has a probabilities object.
-                probabilities = cast("dict[str, object]", value["probabilities"])
-                return {
-                    label: float(p) if type(p) is int else p for label, p in probabilities.items()
-                }
+                # The ledger refuses a q: value that is not an answer's object of its recorded
+                # kind, live and read back, so each has that kind's members.
+                return _binding_form(cast("dict[str, Any]", value))
             return decoded(value, self._types[ref])
         marker = cast("dict[str, Any]", entry["marker"])
         code = marker["cause"]["code"]
         if marker["kind"] == "Unavailable" and code in _RETURNED_MARKERS:
             return Unavailable(Cause(code, [ref]))
         return _NO_KEY
+
+
+def _float(value: object) -> object:
+    """An integral number read back as an ``int`` made the ``float`` it was written as."""
+    return float(value) if type(value) is int else value
+
+
+def _binding_form(value: dict[str, Any]) -> dict[str, object]:
+    """A recorded answer as a binding returns it, by its recorded kind: a probability kind's
+    ``probabilities``, each a ``float``; an extraction answer's five members, ``p_null`` and
+    ``confidence`` each a ``float``, under a recorded ``number`` value type each number in
+    ``value`` and ``guess`` a ``float``, and each container a fresh list. Interpret validates it
+    against the question now asked."""
+    if value["kind"] != AnswerKind.extraction:
+        probabilities = cast("dict[str, object]", value["probabilities"])
+        return {label: _float(p) for label, p in probabilities.items()}
+    number = value["value_type"] == ValueType.number
+
+    def member(found: object) -> object:
+        if type(found) is list:
+            return [member(m) for m in cast("list[object]", found)]
+        return _float(found) if number else found
+
+    def pair(found: object) -> object:
+        if type(found) is list:
+            return [pair(m) for m in cast("list[object]", found)]
+        return found
+
+    return {
+        "value": member(value["value"]),
+        "guess": member(value["guess"]),
+        "p_null": _float(value["p_null"]),
+        "confidence": _float(value["confidence"]),
+        "span": pair(value["span"]),
+    }

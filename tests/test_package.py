@@ -44,6 +44,8 @@ PUBLIC = {
     "load",
     "Answer",
     "AnswerKind",
+    "ExtractionAnswer",
+    "ValueType",
     "Cause",
     "CauseCode",
     "Failed",
