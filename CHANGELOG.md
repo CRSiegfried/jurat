@@ -6,7 +6,7 @@ All notable changes to jurat are recorded here. The format follows [Keep a Chang
 
 ### Added
 
-- A tutorial, `docs/tutorials/write-a-design.md`: one offline design taken through `load`, `decide`, the record and replay, its example tested.
+- A tutorial, `docs/tutorials/write-a-design.md`: one offline design taken through `load`, `decide`, the record and replay, its example tested. Its example files are in the repository at `docs/tutorials/write_a_design/`, for a reader who installed jurat from an index.
 - Label descriptions: a `choice` or `score` label may be `{"name": ..., "description": ...}`, which the design document, the call item and the question's identity hold as declared. `RenderedQuestion.descriptions`, keyword-only, gives each label's description aligned with `labels`, `None` where a label has none. Answers, the answer grid, the lints and the `boundaries` checks read names only.
 - `CallResult.warnings`: the binding's own lines about the call, recorded under the call in `unhashed` and outside every hash. A malformed value is kept in `invalid` and is never a fault.
 - `CallResult.precision`: the decimal places the provider rounds probabilities to, hashed on the call item. A value that is not `None` or an integer from 0 to 17 is `invalid-return` for the whole call.
@@ -23,6 +23,7 @@ All notable changes to jurat are recorded here. The format follows [Keep a Chang
 - `read_record` reads format-1 and format-2 records and `load` loads format-1 and format-2 design documents to their own hash, each under its format's rules. A format-2 record holding a described label, `precision`, `warnings`, `unsupported` or a `hash` member is refused.
 - `Step` takes its arguments as any `Mapping`, read once through `items()`, and still keeps a read-only copy; a non-mapping is a `TypeError`. The recorded plan is unchanged.
 - Check 4's message for a rule that provides another ref names the rule's own `d:` ref, and for another rule's `d:` ref, whose it would be.
+- A `load` refusal for a type that does not fit names the type as written: check 9's text and `reference_date` refs, check 10's state declaration and parameter shape, check 8's boundary leaf, and check 9's boundary key and role leaves.
 
 ## [0.2.0] - 2026-10-22
 
